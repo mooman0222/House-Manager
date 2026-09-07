@@ -262,7 +262,7 @@ fun SettingsScreen(app: AppState) {
         OutlinedButton({ app.clearCache() }, enabled = app.status.isEmpty()) { Text(if (app.status.isEmpty()) "取得データのキャッシュを削除" else "調査中はキャッシュを削除できません") }
         HorizontalDivider()
         Text("物件ページの取り込み", style = MaterialTheme.typography.titleMedium)
-        Text("ブラウザやポータルアプリの共有メニューから「物件レポート」を選ぶと、住所・価格・面積・築年を読み取って候補に追加できます。", style = MaterialTheme.typography.bodySmall)
+        Text("ブラウザやポータルアプリの共有メニューから「おうちカルテ」を選ぶと、住所・価格・面積・築年を読み取って候補に追加できます。", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
         Text("AIアシスタント（端末内で動作）", style = MaterialTheme.typography.titleMedium)
         Text("物件の比較・質問への回答、住所表記の補正、物件ページからの情報抽出に使います。モデルは端末に保存し、通信せずに動きます。端末のメモリに合わせて選んでください。", style = MaterialTheme.typography.bodySmall)

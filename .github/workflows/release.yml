@@ -30,5 +30,5 @@ jobs:
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk house-report.apk
           tag="build-${{ github.run_number }}"
-          gh release create "$tag" house-report.apk --title "物件レポート build ${{ github.run_number }}" \
+          gh release create "$tag" house-report.apk --title "おうちカルテ build ${{ github.run_number }}" \
             --notes "コミット ${{ github.sha }} から自動ビルド。インストール方法は README を参照。"
