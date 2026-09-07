@@ -56,12 +56,20 @@ fun HomeScreen(app: AppState) {
     val cur = current?.let { app.results[it.key] }
     var kind by rememberSaveable { mutableStateOf(Kind.MANSION) }
 
-    // 外から選ばれた候補（検索・地図ピン・比較画面）にページを合わせる
+    // 外から選ばれた候補（検索・地図ピン・比較画面）にページを合わせる。
+    // 送り途中の通過ページで selected を書き戻すと再送りが発生して止まるため、到達までは抑止する
+    var pageTarget by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(app.selected, candidates.size) {
         val i = candidates.indexOfFirst { it.key == app.selected }
-        if (i >= 0 && i != pager.currentPage) pager.animateScrollToPage(i)
+        if (i >= 0 && i != pager.currentPage) {
+            pageTarget = i
+            try { pager.animateScrollToPage(i) } finally { pageTarget = null }
+        }
     }
-    LaunchedEffect(pager.currentPage) { candidates.getOrNull(pager.currentPage)?.let { app.selected = it.key } }
+    LaunchedEffect(pager.currentPage) {
+        if (pager.currentPage == pageTarget) return@LaunchedEffect
+        candidates.getOrNull(pager.currentPage)?.let { app.selected = it.key }
+    }
     // 表示中の候補が未調査なら自動で調べる（失敗したものは再試行ボタンに任せる）
     LaunchedEffect(current?.key, app.status) { current?.let { if (app.results[it.key] == null && it.key !in app.failures && app.status.isEmpty() && app.key.isNotBlank()) app.run(it) } }
 
