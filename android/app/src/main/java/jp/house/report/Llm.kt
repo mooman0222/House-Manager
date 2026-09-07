@@ -70,7 +70,7 @@ fun Candidate.digest(): String = buildString {
     listOfNotNull(input.price?.let { "価格 %.0f万円".format(it) }, input.area?.let { "面積 %.0f㎡".format(it) }, input.built?.let { "築年 ${it}年" }).takeIf { it.isNotEmpty() }?.let { appendLine(it.joinToString(" / ")) }
     sections.forEach { s -> appendLine("■${s.title}"); s.items.forEach { appendLine("- ${it.label}: ${it.summary}") } }
     prices?.let { p ->
-        appendLine("■周辺1kmの成約（直近2年 ${p.units.size}件）: ㎡単価中央値 %.1f万円、条件の近い${p.nSimilar}件の中央値 %.1f万円".format(p.median / 1e4, p.simMedian / 1e4))
+        appendLine("■${p.scope}の成約（直近2年 ${p.units.size}件）: ㎡単価中央値 %.1f万円、条件の近い${p.nSimilar}件の中央値 %.1f万円".format(p.median / 1e4, p.simMedian / 1e4))
         p.myUnit?.let { appendLine("- この物件の㎡単価 %.1f万円（近い条件の中央値比 %+.0f%%）".format(it / 1e4, (it / p.simMedian - 1) * 100)) }
         p.range?.let { (lo, hi) -> appendLine("- 目安価格 %,.0f〜%,.0f万円".format(lo, hi)) }
     }

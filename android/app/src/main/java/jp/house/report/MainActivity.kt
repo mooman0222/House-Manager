@@ -250,7 +250,7 @@ fun PriceTab(c: Candidate) {
     val p = c.prices
     if (p == null) { Card { Text("直近2年に近隣の成約データがありません", Modifier.padding(12.dp)) }; return }
     Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("近隣1kmの成約 ㎡単価（直近2年 ${p.units.size}件）", style = MaterialTheme.typography.titleMedium)
+        Text("${p.scope}の成約 ㎡単価（直近2年 ${p.units.size}件）", style = MaterialTheme.typography.titleMedium)
         Histogram(p.units, p.myUnit)
         Text("全体の中央値 %.1f万円/㎡ ／ 面積・築年の近い${p.nSimilar}件の中央値 %.1f万円/㎡".format(p.median / 1e4, p.simMedian / 1e4))
         p.myUnit?.let { m -> Text("この物件 %.1f万円/㎡（近い条件の中央値比 %+.0f%%、赤線）".format(m / 1e4, (m / p.simMedian - 1) * 100), color = c.price.color(), fontWeight = FontWeight.Bold) }

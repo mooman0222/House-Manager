@@ -21,7 +21,7 @@ data class Series(val labels: List<String>, val values: List<Double>)
 data class MapArea(val label: String, val level: Level, val summary: String, val ring: List<Pair<Double, Double>>)
 data class MapPin(val icon: String, val category: String, val name: String, val lat: Double, val lon: Double, val dist: Int)
 data class MapLayers(val areas: List<MapArea>, val pins: List<MapPin>)
-data class Prices(val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val trend: Series, val recent: List<String>)
+data class Prices(val scope: String, val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val trend: Series, val recent: List<String>)
 
 data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val map: MapLayers, val prices: Prices?, val pop: Series?) {
     val safety get() = worst(sections[0].items)
@@ -178,11 +178,18 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     val (from20, to) = quartersBack(20)
     val (from8, _) = quartersBack(8)
     data class Deal(val unit: Double, val q: String, val area: Double, val built: Double?, val p: JSONObject)
-    val deals = L.near("XPT001", 1000.0, mapOf("from" to from20, "to" to to, "landTypeCode" to inp.kind.code)).mapNotNull { (_, q) ->
+    // XPT001 はズーム15でもタイル単位の代表点に集約されるため、座標での距離絞り込みは使えない。
+    // 周辺9タイル（約3km四方）を取り、住所に含まれる町丁目と一致する成約があればそれを優先する。
+    val allDeals = L.tiles("XPT001", 15, 1, mapOf("from" to from20, "to" to to, "landTypeCode" to inp.kind.code)).map { it.getJSONObject("properties") }.mapNotNull { q ->
         val totS = q.s("u_transaction_price_total_ja"); val tot = num(totS); val ar = num(q.s("u_area_ja"))
         val m = Regex("(\\d{4})年第(\\d)四半期").find(q.s("point_in_time_name_ja")) ?: return@mapNotNull null
         if (tot != null && tot > 0 && ar != null && ar > 0) Deal(tot * (if ("万" in totS) 10000 else 1) / ar, m.groupValues[1] + m.groupValues[2], ar, num(q.s("u_construction_year_ja"))?.takeIf { it > 0 }, q) else null
     }
+    val addr = inp.address + g.title
+    val sameDistrict = allDeals.filter { d -> d.p.s("district_name_ja").let { it.length >= 2 && it in addr } }
+    val useDistrict = sameDistrict.count { it.q >= from8 } >= 5
+    val deals = if (useDistrict) sameDistrict else allDeals
+    val scope = if (useDistrict) "同じ町丁目（${sameDistrict.first().p.s("district_name_ja")}）" else "周辺約3km"
     var prices: Prices? = null
     val recent8 = deals.filter { it.q >= from8 }
     if (recent8.isNotEmpty()) {
@@ -195,7 +202,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         val qs = deals.map { it.q }.distinct().sorted()
         val trend = Series(qs.map { "${it.take(4)}Q${it.drop(4)}" }, qs.map { q -> median(deals.filter { it.q == q }.map { it.unit }) / 1e4 })
         val rec = recent8.sortedByDescending { it.q }.take(5).map { "${it.p.s("district_name_ja")} ${it.p.s("point_in_time_name_ja")} ${it.p.s("u_transaction_price_total_ja")} ${it.p.s("u_area_ja")} 築${it.p.s("u_construction_year_ja")}" }
-        prices = Prices(units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, trend, rec)
+        prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, trend, rec)
     }
 
     return Candidate(inp, g, listOf(Section("災害リスク", hazard), Section("建物・建築条件", building), Section("暮らし", living)), MapLayers(areas, pins), prices, pop)
