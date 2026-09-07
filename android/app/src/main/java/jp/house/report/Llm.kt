@@ -1,16 +1,8 @@
 package jp.house.report
 
 import android.content.Context
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -20,10 +12,6 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -100,61 +88,7 @@ fun String.stripMd(): String = replace(Regex("\\*\\*|__|`"), "")
 private const val REVIEW = "この物件を講評してください。良い点・注意点・購入前に確認すべき事項を、それぞれ箇条書きで。"
 
 @Composable
-fun AiTab(c: Candidate, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    if (!Llm.ready(ctx)) {
-        Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("AIモデルが未導入です", style = MaterialTheme.typography.titleMedium)
-            Text("設定画面から Gemma 4 E2B（約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GB）をダウンロードすると、この物件の講評や質問への回答を端末内で生成できます。", style = MaterialTheme.typography.bodySmall)
-        }
-        return
-    }
-    val log = remember(c) { mutableStateListOf<Pair<Boolean, String>>() } // (ユーザー発言か, 本文)
-    var input by remember(c) { mutableStateOf("") }
-    var busy by remember(c) { mutableStateOf("") }
-    var error by remember(c) { mutableStateOf("") }
-    var conv by remember(c) { mutableStateOf<Conversation?>(null) }
-    val scope = rememberCoroutineScope()
-    val list = rememberLazyListState()
-    DisposableEffect(c) { onDispose { conv?.let { it.cancelProcess(); it.close() } } } // 生成途中なら止めてから閉じる
-    LaunchedEffect(log.size, log.lastOrNull()?.second?.length) { if (log.isNotEmpty()) list.animateScrollToItem(log.size - 1) }
-
-    fun send(q: String) {
-        if (busy.isNotEmpty() || q.isBlank()) return
-        log += true to q; log += false to ""; input = ""; error = ""
-        scope.launch {
-            try {
-                busy = if (conv == null) "モデルを読み込み中…" else "考え中…"
-                val cv = conv ?: withContext(Dispatchers.IO) { Llm.chat(ctx, ADVISOR + c.digest()) }.also { conv = it }
-                busy = "考え中…"
-                withContext(Dispatchers.IO) {
-                    cv.sendMessageAsync(q).collect { m -> log[log.lastIndex] = false to log.last().second + m.text } // 差分が届く
-                }
-            } catch (e: CancellationException) { throw e
-            } catch (e: Exception) {
-                error = "生成に失敗しました: ${e.message?.take(120) ?: e.javaClass.simpleName}"
-                if (log.lastOrNull()?.second.isNullOrEmpty()) log.removeAt(log.lastIndex)
-            } finally { busy = "" }
-        }
-    }
-
-    Column(modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), state = list, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
-            if (log.isEmpty()) item { Text("調査結果をもとに、端末内のAIが答えます。回答は参考情報で、正確性は保証されません。", style = MaterialTheme.typography.bodySmall) }
-            items(log) { (me, t) ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = if (me) Arrangement.End else Arrangement.Start) {
-                    Card(colors = CardDefaults.cardColors(containerColor = if (me) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
-                        Text(if (me) t else t.stripMd().ifEmpty { busy }, Modifier.padding(10.dp).widthIn(max = 300.dp), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-        }
-        if (busy.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (error.isNotEmpty()) Text(error, Modifier.padding(horizontal = 12.dp), color = C_BAD, style = MaterialTheme.typography.bodySmall)
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (log.isEmpty()) AssistChip({ send(REVIEW) }, { Text("この物件を講評して") }, enabled = busy.isEmpty())
-            OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("質問を入力") }, maxLines = 3, enabled = busy.isEmpty())
-            Button({ send(input) }, enabled = busy.isEmpty() && input.isNotBlank()) { Text("送信") }
-        }
-    }
-}
+fun AiTab(c: Candidate, state: ChatState, modifier: Modifier = Modifier) = ChatPanel(
+    state, "調査結果をもとに、端末内のAIが答えます。回答は参考情報で、正確性は保証されません。", listOf(REVIEW),
+    { ctx -> Llm.chat(ctx, ADVISOR + c.digest()) }, modifier
+)

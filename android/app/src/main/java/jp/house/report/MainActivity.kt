@@ -67,7 +67,7 @@ fun App() {
     fun run(inp: Input, onDone: (Candidate) -> Unit) {
         if (status.isNotEmpty()) return
         results[inp.key]?.let { onDone(it); return }
-        if (key.isBlank()) { error = "設定画面でAPIキーを入力してください"; tab = 2; return }
+        if (key.isBlank()) { error = "設定画面でAPIキーを入力してください"; tab = 3; return }
         status = "開始"; error = ""; failures.remove(inp.key)
         val apiKey = key.trim()
         val fix: ((String) -> String?)? = if (Llm.ready(ctx)) { { a -> runCatching { Llm.normalizeAddress(ctx, a) }.getOrNull() } } else null
@@ -99,11 +99,14 @@ fun App() {
     }
     fun deleteModel() { Llm.delete(ctx); modelReady = false }
     fun toggleSave(inp: Input) { saved = if (saved.any { it.key == inp.key }) saved.filter { it.key != inp.key } else saved + inp; storeSaved(ctx, saved) }
+    // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら次の発言から作り直す
+    val chat = remember { ChatState() }
+    LaunchedEffect(results.keys.toSet()) { if (chat.busy.isEmpty()) chat.close() }
 
     BackHandler(detail != null) { detail = null }
     Scaffold(bottomBar = {
         if (detail == null) NavigationBar {
-            listOf("探す" to Icons.Default.Search, "比べる" to Icons.Default.List, "設定" to Icons.Default.Settings).forEachIndexed { i, (t, ic) ->
+            listOf("探す" to Icons.Default.Search, "比べる" to Icons.Default.List, "AI" to Icons.Default.Face, "設定" to Icons.Default.Settings).forEachIndexed { i, (t, ic) ->
                 NavigationBarItem(tab == i, { tab = i }, { Icon(ic, t) }, label = { Text(t) })
             }
         }
@@ -112,6 +115,8 @@ fun App() {
             val d = detail
             when {
                 d != null -> DetailScreen(d, key.trim(), saved.any { it.key == d.input.key }, { toggleSave(d.input) }) { detail = null }
+                tab == 2 -> ChatPanel(chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
+                    listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(results.values, saved.filter { it.key !in results })) }, Modifier.fillMaxSize())
                 tab == 0 -> SearchScreen(saved, status, error, onRun = { run(it) { c -> detail = c } }, onOpen = { run(it) { c -> detail = c } })
                 tab == 1 -> CompareScreen(saved, results, status, failures, onLoad = { run(it) {} }, onOpen = { detail = results[it.key] }, onRemove = { toggleSave(it); failures.remove(it.key) })
                 else -> SettingsScreen(key, { key = it; prefs.edit().putString("key", it).apply() }, modelReady, dlBytes, dlError, ::downloadModel, ::deleteModel) { File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear() }
@@ -198,6 +203,8 @@ fun Dot(lv: Level) = Box(Modifier.size(12.dp).clip(CircleShape).background(lv.co
 @Composable
 fun DetailScreen(c: Candidate, reinfoKey: String, isSaved: Boolean, onSave: () -> Unit, onBack: () -> Unit) {
     var t by remember { mutableStateOf(0) }
+    val chat = remember(c) { ChatState() }
+    DisposableEffect(c) { onDispose { chat.close() } }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(title = { Text(c.input.address, maxLines = 1, overflow = TextOverflow.Ellipsis) }, windowInsets = WindowInsets(0),
             navigationIcon = { IconButton(onBack) { Icon(Icons.Default.ArrowBack, "戻る") } },
@@ -208,7 +215,7 @@ fun DetailScreen(c: Candidate, reinfoKey: String, isSaved: Boolean, onSave: () -
         }
         TabRow(t) { listOf("概要", "地図", "価格", "人口", "AI").forEachIndexed { i, s -> Tab(t == i, { t = i }, text = { Text(s) }) } }
         if (t == 1) MapTab(c, reinfoKey, Modifier.weight(1f))
-        else if (t == 4) AiTab(c, Modifier.weight(1f))
+        else if (t == 4) AiTab(c, chat, Modifier.weight(1f))
         else Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when (t) {
                 0 -> c.sections.forEach { sec ->
