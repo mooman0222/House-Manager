@@ -35,9 +35,11 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -58,20 +60,33 @@ fun HomeScreen(app: AppState) {
     var kind by rememberSaveable { mutableStateOf(Kind.MANSION) }
 
     // 外から選ばれた候補（検索・地図ピン・比較画面）にページを合わせる。
-    // 送り途中の通過ページで selected を書き戻すと再送りが発生して止まるため、到達までは抑止する
-    var pageTarget by remember { mutableStateOf<Int?>(null) }
+    // プログラム送り中は通過ページの書き戻しを全て抑止する（1件ずつ書き戻されて送り直し・巻き戻りになる）
+    var autoScrolling by remember { mutableStateOf(false) }
     LaunchedEffect(app.selected, candidates.size) {
-        val i = candidates.indexOfFirst { it.key == app.selected }
-        if (i < 0 || i == pager.currentPage) return@LaunchedEffect
-        // ユーザーが操作中は終わるまで待ち、改めて送り先を確認する（送りとスワイプの競合防止）
-        if (pager.isScrollInProgress) snapshotFlow { pager.isScrollInProgress }.first { !it }
-        val j = candidates.indexOfFirst { it.key == app.selected }
-        if (j < 0 || j == pager.currentPage) return@LaunchedEffect
-        pageTarget = j
-        try { pager.animateScrollToPage(j) } finally { pageTarget = null }
+        var first = true
+        while (true) {
+            val i = candidates.indexOfFirst { it.key == app.selected }
+            if (i < 0 || i == pager.currentPage) return@LaunchedEffect
+            if (!first) {
+                // 中断後の再試行は操作が終わるまで待つ（待つ間に selected が変われば再評価される）
+                snapshotFlow { pager.isScrollInProgress }.first { !it }
+                continue
+            }
+            first = false
+            autoScrolling = true
+            try {
+                pager.animateScrollToPage(i)
+                return@LaunchedEffect
+            } catch (e: CancellationException) {
+                if (!coroutineContext.isActive) throw e // エフェクト自体のキャンセル
+                // ユーザー操作による中断 → ループ継続して再試行
+            } finally {
+                autoScrolling = false
+            }
+        }
     }
     LaunchedEffect(pager.currentPage) {
-        if (pager.currentPage == pageTarget) return@LaunchedEffect
+        if (autoScrolling) return@LaunchedEffect
         candidates.getOrNull(pager.currentPage)?.let { app.selected = it.key }
     }
     // 表示中の候補が未調査なら自動で調べる（失敗したものは再試行ボタンに任せる）
@@ -136,7 +151,9 @@ fun HomeScreen(app: AppState) {
                         val hue = when (c.safety) { Level.OK -> BitmapDescriptorFactory.HUE_GREEN; Level.WARN -> BitmapDescriptorFactory.HUE_YELLOW; Level.BAD -> BitmapDescriptorFactory.HUE_RED; Level.INFO -> BitmapDescriptorFactory.HUE_AZURE }
                         val icon = remember(hue) { BitmapDescriptorFactory.defaultMarker(hue) }
                         Marker(state = rememberMarkerState(position = LatLng(c.geo.lat, c.geo.lon)), title = inp.address, snippet = "安全 ${c.safety.word()} / 暮らし ${c.living.word()} / 価格 ${c.price.word()}",
-                            icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { if (app.selected != inp.key) app.selected = inp.key; false })
+                            icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f,
+                            // 地図も即時に向け直す。ページ到達待ちだと古い行き先への移動が後に終わって見える
+                            onClick = { if (app.selected != inp.key) { app.selected = inp.key; mapKey = inp.key }; false })
                     }
                 }
                 if (mapCand != null && ov != null) CandidateOverlay(mapCand, ov)
