@@ -73,6 +73,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
     /** 地図画面のシートで開いている候補 */
     var selected by mutableStateOf<String?>(null)
     var pendingImport by mutableStateOf<Input?>(null)
+    /** 共有された物件ページの読み取り中。ページ取得＋端末内LLMで時間がかかるため、終わるまで操作を止める */
+    var importing by mutableStateOf(false)
 
     /** 保存済み + 調査済み（未保存）を、保存順で */
     val candidates: List<Input> get() = (saved + results.values.map { it.input }).distinctBy { it.key }
@@ -185,7 +187,7 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
     val ctx = LocalContext.current
     val app: AppState = viewModel()
     LaunchedEffect(app.results.keys.toSet()) { app.chat.invalidate() }
-    LaunchedEffect(sharedText) { if (sharedText != null) { app.tab = 0; app.pendingImport = importListing(ctx, sharedText); onSharedHandled() } }
+    LaunchedEffect(sharedText) { if (sharedText != null) { app.tab = 0; app.importing = true; try { app.pendingImport = importListing(ctx, sharedText) } finally { app.importing = false }; onSharedHandled() } }
 
     Scaffold(bottomBar = {
         NavigationBar {
@@ -202,6 +204,10 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
                     listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true })) }, Modifier.fillMaxSize())
                 else -> SettingsScreen(app)
             }
+            // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
+            if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },
+                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("ページを取得し、住所・価格・面積・築年を読み取っています。終わるまでお待ちください。", style = MaterialTheme.typography.bodySmall) } },
+                confirmButton = {})
         }
     }
 }

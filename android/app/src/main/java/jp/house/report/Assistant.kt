@@ -43,6 +43,8 @@ class ChatState(val scope: CoroutineScope) {
     /** 生成中に調査結果が増えた。生成が終わったら会話を作り直す */
     var stale = false
     fun close() { conv?.let { it.cancelProcess(); it.close() }; conv = null }
+    /** 会話を最初からにする（吹き出しと履歴を消す）。生成中は何もしない */
+    fun reset() { if (busy.isNotEmpty()) return; close(); log.clear(); error = ""; stale = false }
     /** 結果が変わった時に呼ぶ。生成中なら終わってから作り直す */
     fun invalidate() { if (busy.isEmpty()) close() else stale = true }
 }
@@ -108,6 +110,7 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("依頼や質問を入力") }, maxLines = 3, enabled = state.busy.isEmpty())
             Button({ send(input) }, enabled = state.busy.isEmpty() && input.isNotBlank()) { Text("送信") }
+            TextButton({ state.reset() }, enabled = state.busy.isEmpty() && state.log.isNotEmpty()) { Text("リセット") }
         }
     }
 }

@@ -62,7 +62,9 @@ fun HomeScreen(app: AppState) {
     LaunchedEffect(current?.key, app.status) { current?.let { if (app.results[it.key] == null && it.key !in app.failures && app.status.isEmpty() && app.key.isNotBlank()) app.run(it) } }
 
     val camera = rememberCameraPositionState { position = CameraPosition.fromLatLngZoom(TOKYO, 11f) }
-    LaunchedEffect(cur?.geo) { cur?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
+    // 地図キー無しでは Maps SDK が未初期化のため CameraUpdateFactory が NPE になる。地図表示時のみ追従する
+    val hasMap = mapsKey(ctx).isNotBlank()
+    LaunchedEffect(cur?.geo, hasMap) { if (hasMap) cur?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
     val ov = cur?.let { rememberOverlay(it, app.reinfoKey) }
     // 地図タップで選んだ地点。住所が取れたらカードで確認してから候補に追加する
     var pick by remember { mutableStateOf<LatLng?>(null) }
@@ -92,7 +94,7 @@ fun HomeScreen(app: AppState) {
         }
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(bottom = pad.calculateBottomPadding())) {
-            if (mapsKey(ctx).isBlank()) Column(Modifier.fillMaxSize().padding(16.dp, 96.dp, 16.dp, 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!hasMap) Column(Modifier.fillMaxSize().padding(16.dp, 96.dp, 16.dp, 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("地図キーが未設定です", style = MaterialTheme.typography.titleMedium)
                 Text("android/local.properties に MAPS_API_KEY を設定してビルドすると、ここに地図と区域が表示されます。検索と調査はそのまま使えます。", style = MaterialTheme.typography.bodySmall)
             } else GoogleMap(
