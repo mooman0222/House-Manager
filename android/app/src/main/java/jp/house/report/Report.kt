@@ -34,9 +34,14 @@ data class Deal(val unit: Double, val q: String, val area: Double, val built: Do
 /** simNote は「近い条件」をどう絞ったかの説明文（入力が結果にどう効いたかを画面で示す） */
 data class Prices(val scope: String, val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val simNote: String, val trend: Series, val deals: List<Deal>)
 
-data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val map: MapLayers, val prices: Prices?, val pop: Series?) {
-    val safety get() = worst(sections[0].items)
-    val living get() = worst(sections[2].items)
+const val SEC_HAZARD = "災害リスク"; const val SEC_BUILDING = "建物・建築条件"; const val SEC_LIVING = "暮らし"
+val SECTION_ORDER = listOf(SEC_HAZARD, SEC_BUILDING, SEC_LIVING)
+
+/** done=false の間は調査中で、sections は終わった分だけ入っている（段階表示用） */
+data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val map: MapLayers, val prices: Prices?, val pop: Series?, val done: Boolean = true) {
+    fun section(title: String) = sections.firstOrNull { it.title == title }
+    val safety get() = section(SEC_HAZARD)?.let { worst(it.items) } ?: Level.INFO
+    val living get() = section(SEC_LIVING)?.let { worst(it.items) } ?: Level.INFO
     val price: Level get() {
         val p = prices ?: return Level.INFO
         val r = (p.myUnit ?: return Level.INFO) / p.simMedian
@@ -108,7 +113,7 @@ fun quartersBack(n: Int): Pair<String, String> {
 private fun median(v: List<Double>): Double { val s = v.sorted(); val n = s.size; return if (n % 2 == 1) s[n / 2] else (s[n / 2 - 1] + s[n / 2]) / 2 }
 
 /** fix は住所が見つからない時に表記を補正する（端末内 LLM）。null なら補正しない。 */
-fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)? = null, progress: (String) -> Unit): Candidate {
+fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)? = null, partial: (Candidate) -> Unit = {}, progress: (String) -> Unit): Candidate {
     progress("住所を検索中")
     val g = try { geocode(inp.address) } catch (e: ApiError) {
         val f = fix ?: throw e
@@ -120,6 +125,9 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     val L = Lib(key, g.lat, g.lon, cacheDir)
     val areas = ArrayList<MapArea>()
     val pins = ArrayList<MapPin>()
+    val sections = ArrayList<Section>()
+    fun emit() = partial(Candidate(inp, g, sections.toList(), MapLayers(areas.toList(), pins.toList()), null, null, done = false))
+    emit()
 
     fun poly(l: PolyLayer): Item {
         progress(l.label)
@@ -134,6 +142,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     }
 
     val hazard = HAZARD_LAYERS.map { poly(it) }
+    sections += Section(SEC_HAZARD, hazard); emit()
 
     val building = ArrayList<Item>()
     building += BUILDING_LAYERS.map { poly(it) }
@@ -148,6 +157,8 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
             else -> Item("🏢", "築年", Level.OK, "築${age}年 新耐震")
         }
     }
+
+    sections += Section(SEC_BUILDING, building); emit()
 
     val living = ArrayList<Item>()
     living += LIVING_LAYERS.map { poly(it) }
@@ -187,6 +198,8 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         living += Item("👥", "将来人口", if (chg < -20) Level.WARN else Level.INFO, "${pop.labels.first()}→${pop.labels.last()}年 %+.0f%%".format(chg) + (old?.let { "  65歳以上 %.0f%%".format(it * 100) } ?: ""), "周辺250mメッシュの推計。減少が大きいと商業施設・学校の統廃合リスク")
     }
 
+    sections += Section(SEC_LIVING, living); emit()
+
     progress("成約価格")
     val (from20, to) = quartersBack(20)
     val (from8, _) = quartersBack(8)
@@ -223,5 +236,5 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, simNote, trend, allDeals)
     }
 
-    return Candidate(inp, g, listOf(Section("災害リスク", hazard), Section("建物・建築条件", building), Section("暮らし", living)), MapLayers(areas, pins), prices, pop)
+    return Candidate(inp, g, sections, MapLayers(areas, pins), prices, pop)
 }

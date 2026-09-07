@@ -153,3 +153,15 @@ class Lib(private val key: String, val lat: Double, val lon: Double, private val
     fun near(api: String, radius: Double = 1000.0, params: Map<String, String> = emptyMap()): List<Pair<Int, JSONObject>> =
         nearFeatures(api, radius, params).map { it.first to it.second.getJSONObject("properties") }
 }
+
+/** 緯度経度 → 住所（国土地理院）。市区町村名は GSI の muni.js から引き、ファイルにキャッシュする。 */
+fun reverseGeocode(lat: Double, lon: Double, cacheDir: File): String {
+    val r = (httpJson("https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=$lat&lon=$lon") as JSONObject).optJSONObject("results") ?: throw ApiError("住所が取得できませんでした")
+    val code = r.optString("muniCd"); val town = r.optString("lv01Nm")
+    val f = File(cacheDir, "muni.js")
+    if (!f.exists()) { f.parentFile?.mkdirs(); f.writeText(URL("https://maps.gsi.go.jp/js/muni.js").readText()) }
+    // 例: GSI.MUNI_ARRAY["12227"] = '12,千葉県,12227,浦安市';
+    val m = Regex("\"$code\"\\]\\s*=\\s*'([^']*)'").find(f.readText()) ?: throw ApiError("市区町村コード $code が不明")
+    val parts = m.groupValues[1].split(",")
+    return parts[1] + parts[3].replace("　", "") + town
+}
