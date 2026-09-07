@@ -37,6 +37,7 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -61,10 +62,13 @@ fun HomeScreen(app: AppState) {
     var pageTarget by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(app.selected, candidates.size) {
         val i = candidates.indexOfFirst { it.key == app.selected }
-        if (i >= 0 && i != pager.currentPage) {
-            pageTarget = i
-            try { pager.animateScrollToPage(i) } finally { pageTarget = null }
-        }
+        if (i < 0 || i == pager.currentPage) return@LaunchedEffect
+        // ユーザーが操作中は終わるまで待ち、改めて送り先を確認する（送りとスワイプの競合防止）
+        if (pager.isScrollInProgress) snapshotFlow { pager.isScrollInProgress }.first { !it }
+        val j = candidates.indexOfFirst { it.key == app.selected }
+        if (j < 0 || j == pager.currentPage) return@LaunchedEffect
+        pageTarget = j
+        try { pager.animateScrollToPage(j) } finally { pageTarget = null }
     }
     LaunchedEffect(pager.currentPage) {
         if (pager.currentPage == pageTarget) return@LaunchedEffect
@@ -132,7 +136,7 @@ fun HomeScreen(app: AppState) {
                         val hue = when (c.safety) { Level.OK -> BitmapDescriptorFactory.HUE_GREEN; Level.WARN -> BitmapDescriptorFactory.HUE_YELLOW; Level.BAD -> BitmapDescriptorFactory.HUE_RED; Level.INFO -> BitmapDescriptorFactory.HUE_AZURE }
                         val icon = remember(hue) { BitmapDescriptorFactory.defaultMarker(hue) }
                         Marker(state = rememberMarkerState(position = LatLng(c.geo.lat, c.geo.lon)), title = inp.address, snippet = "安全 ${c.safety.word()} / 暮らし ${c.living.word()} / 価格 ${c.price.word()}",
-                            icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { app.selected = inp.key; false })
+                            icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { if (app.selected != inp.key) app.selected = inp.key; false })
                     }
                 }
                 if (mapCand != null && ov != null) CandidateOverlay(mapCand, ov)
