@@ -72,7 +72,7 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
                     Llm.gate.acquire() // 住所補正など他の推論と並走させない
                     try {
                         // 履歴が上限に近づいたら会話を作り直す（吹き出しは残る）。超えると生成が失敗する
-                        state.conv?.takeIf { it.getTokenCount() > Llm.MAX_TOKENS * 0.8 }?.let { state.close() }
+                        state.conv?.takeIf { it.getTokenCount() > Llm.maxTokens(ctx) * 0.8 }?.let { state.close() }
                         val cv = state.conv ?: makeConv(ctx).also { state.conv = it }
                         state.busy = "考え中…"
                         cv.sendMessageAsync(q).collect { m -> log[log.lastIndex] = false to log.last().second + m.text } // 差分が届く

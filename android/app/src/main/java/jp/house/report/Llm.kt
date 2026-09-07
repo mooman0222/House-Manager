@@ -32,8 +32,17 @@ object Llm {
         LlmModel("gemma-4-E4B-it", "Gemma 4 E4B（高性能）", "RAM 8GB 以上推奨。最も賢いが遅く、メモリを多く使う", "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm", 3_659_530_240L),
     )
     const val DEFAULT_MODEL = "gemma-4-E2B-it"
-    /** 会話1本の上限（前置き＋履歴＋生成）。候補が増えると前置きだけで数千トークン使う */
-    const val MAX_TOKENS = 16384
+    /** 会話1本の上限（前置き＋履歴＋生成）。大きいほど KV キャッシュのメモリを食い、RAM 4GB 級では 16384 でプロセスが落ちた */
+    val TOKEN_OPTIONS = listOf(4096, 8192, 16384, 32768)
+    const val DEFAULT_TOKENS = 8192
+    fun maxTokens(ctx: Context) = prefs(ctx).getInt("maxTokens", DEFAULT_TOKENS)
+    /** 上限を保存。読み込み済みエンジンと違えば次回利用時に作り直す */
+    @Synchronized fun setMaxTokens(ctx: Context, n: Int): Boolean {
+        if (busy) return false
+        prefs(ctx).edit().putInt("maxTokens", n).apply()
+        if (engineTokens != n) { engine?.close(); engine = null }
+        return true
+    }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     fun selectedId(ctx: Context) = prefs(ctx).getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
@@ -83,12 +92,13 @@ object Llm {
 
     private var engine: Engine? = null
     private var engineModel: String? = null
+    private var engineTokens = 0
     /** 初回は読み込みに10秒以上かかる。IO スレッドで呼ぶ。プロセス生存中は使い回し、モデルが変わったら作り直す。 */
     @Synchronized fun engine(ctx: Context): Engine {
-        val m = model(ctx)
-        engine?.takeIf { engineModel == m.id }?.let { return it }
+        val m = model(ctx); val n = maxTokens(ctx)
+        engine?.takeIf { engineModel == m.id && engineTokens == n }?.let { return it }
         engine?.close()
-        return Engine(EngineConfig(modelPath = m.file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = MAX_TOKENS)).also { it.initialize(); engine = it; engineModel = m.id }
+        return Engine(EngineConfig(modelPath = m.file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = n)).also { it.initialize(); engine = it; engineModel = m.id; engineTokens = n }
     }
 
     fun chat(ctx: Context, system: String, temperature: Double = 1.0): Conversation = engine(ctx).createConversation(

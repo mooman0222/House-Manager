@@ -161,6 +161,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var dlError by mutableStateOf("")
     val modelReady get() = Llm.ready(ctx)
     fun selectModel(id: String): Boolean { if (!Llm.select(ctx, id)) return false; modelId = id; chat.close(); return true }
+    var maxTokens by mutableStateOf(Llm.maxTokens(ctx))
+    fun setMaxTokens(n: Int): Boolean { if (!Llm.setMaxTokens(ctx, n)) return false; maxTokens = n; chat.close(); return true }
     fun downloadModel(m: LlmModel) {
         if (downloading != null) return
         downloading = m.id; dlBytes = 0; dlError = ""
@@ -253,6 +255,13 @@ fun SettingsScreen(app: AppState) {
         HorizontalDivider()
         Text("AIアシスタント（端末内で動作）", style = MaterialTheme.typography.titleMedium)
         Text("物件の比較・質問への回答、住所表記の補正、物件ページからの情報抽出に使います。モデルは端末に保存し、通信せずに動きます。端末のメモリに合わせて選んでください。", style = MaterialTheme.typography.bodySmall)
+        Text("会話の上限トークン", style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            Llm.TOKEN_OPTIONS.forEachIndexed { i, n ->
+                SegmentedButton(app.maxTokens == n, { if (!app.setMaxTokens(n)) app.dlError = "AIが使用中のため変更できません" }, SegmentedButtonDefaults.itemShape(i, Llm.TOKEN_OPTIONS.size), enabled = !app.aiInUse) { Text("$n", style = MaterialTheme.typography.labelSmall) }
+            }
+        }
+        Text("前置き（調査結果）＋会話履歴＋生成の合計。大きいほどメモリを使い、RAM 4GB 級の端末では 16384 以上でアプリが落ちることがあります。候補が多く前置きが長い場合だけ上げてください。", style = MaterialTheme.typography.labelSmall)
         app.modelsVersion // 導入状態が変わったら再描画
         Llm.MODELS.forEach { m ->
             val ready = m.ready(app.ctx); val selected = m.id == app.modelId; val dl = app.downloading == m.id
