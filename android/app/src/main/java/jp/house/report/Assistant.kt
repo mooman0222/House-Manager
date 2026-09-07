@@ -1,7 +1,9 @@
 package jp.house.report
 
 import android.content.Context
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,7 +77,7 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
         }
     }
 
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().imePadding()) { // キーボード表示中も入力欄が隠れないようにする
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), state = list, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
             if (log.isEmpty()) item { Text(intro, style = MaterialTheme.typography.bodySmall) }
             items(log) { (me, t) ->
@@ -88,8 +90,10 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
         }
         if (state.busy.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (state.error.isNotEmpty()) Text(state.error, Modifier.padding(horizontal = 12.dp), color = C_BAD, style = MaterialTheme.typography.bodySmall)
+        if (log.isEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            quick.forEach { q -> AssistChip({ send(q) }, { Text(q) }, enabled = state.busy.isEmpty()) }
+        }
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (log.isEmpty()) quick.forEach { q -> AssistChip({ send(q) }, { Text(q) }, enabled = state.busy.isEmpty()) }
             OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("依頼や質問を入力") }, maxLines = 3, enabled = state.busy.isEmpty())
             Button({ send(input) }, enabled = state.busy.isEmpty() && input.isNotBlank()) { Text("送信") }
         }
