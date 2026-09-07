@@ -19,6 +19,8 @@ import java.net.URL
 object Llm {
     const val MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
     const val MODEL_BYTES = 2_588_147_712L
+    /** 会話1本の上限（前置き＋履歴＋生成）。候補が増えると前置きだけで数千トークン使う */
+    const val MAX_TOKENS = 16384
     fun file(ctx: Context) = File(ctx.filesDir, "gemma-4-E2B-it.litertlm")
     fun ready(ctx: Context) = file(ctx).exists()
 
@@ -56,7 +58,7 @@ object Llm {
     private var engine: Engine? = null
     /** 初回は読み込みに10秒以上かかる。IO スレッドで呼ぶ。プロセス生存中は使い回す。 */
     @Synchronized fun engine(ctx: Context): Engine = engine ?: Engine(
-        EngineConfig(modelPath = file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = 4096)
+        EngineConfig(modelPath = file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = MAX_TOKENS)
     ).also { it.initialize(); engine = it }
 
     fun chat(ctx: Context, system: String, temperature: Double = 1.0): Conversation = engine(ctx).createConversation(
