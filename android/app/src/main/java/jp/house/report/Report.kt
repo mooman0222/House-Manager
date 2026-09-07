@@ -31,7 +31,8 @@ data class Deal(val unit: Double, val q: String, val area: Double, val built: Do
     val spec get() = listOf(p.s("u_area_ja"), p.s("floor_plan_name_ja"), p.s("u_construction_year_ja").takeIf { it.isNotEmpty() }?.let { "${it}築" } ?: "", p.s("building_structure_name_ja"),
         p.s("remark_renovation_name_ja"), p.s("land_use_name_ja"), p.s("remark_name_ja")).filter { it.isNotEmpty() }.joinToString(" / ")
 }
-data class Prices(val scope: String, val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val trend: Series, val deals: List<Deal>)
+/** simNote は「近い条件」をどう絞ったかの説明文（入力が結果にどう効いたかを画面で示す） */
+data class Prices(val scope: String, val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val simNote: String, val trend: Series, val deals: List<Deal>)
 
 data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val map: MapLayers, val prices: Prices?, val pop: Series?) {
     val safety get() = worst(sections[0].items)
@@ -206,12 +207,18 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         val units = recent8.map { it.unit }.sorted()
         val med = median(units)
         var similar = recent8.filter { d -> inp.area?.let { Math.abs(d.area - it) <= it * 0.2 } ?: true && (inp.built == null || d.built == null || Math.abs(d.built - inp.built) <= 5) }
+        val conds = listOfNotNull(inp.area?.let { "面積 %.0f〜%.0f㎡".format(it * 0.8, it * 1.2) }, inp.built?.let { "築年 ${it - 5}〜${it + 5}年" })
+        val simNote = when {
+            conds.isEmpty() -> "面積・築年が未入力のため、全${recent8.size}件で比較"
+            similar.size < 5 -> "${conds.joinToString("・")}に該当する成約が${similar.size}件と少ないため、全${recent8.size}件で比較"
+            else -> "${conds.joinToString("・")}の${similar.size}件で比較"
+        }
         if (similar.size < 5) similar = recent8
         val su = similar.map { it.unit }.sorted()
         val range = inp.area?.let { a -> su[su.size / 4] * a / 1e4 to su[3 * su.size / 4] * a / 1e4 }
         val qs = deals.map { it.q }.distinct().sorted()
         val trend = Series(qs.map { "${it.take(4)}Q${it.drop(4)}" }, qs.map { q -> median(deals.filter { it.q == q }.map { it.unit }) / 1e4 })
-        prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, trend, allDeals)
+        prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, simNote, trend, allDeals)
     }
 
     return Candidate(inp, g, listOf(Section("災害リスク", hazard), Section("建物・建築条件", building), Section("暮らし", living)), MapLayers(areas, pins), prices, pop)

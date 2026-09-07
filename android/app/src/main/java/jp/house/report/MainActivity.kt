@@ -153,7 +153,7 @@ fun SearchScreen(saved: List<Input>, status: String, error: String, onRun: (Inpu
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             Kind.entries.forEachIndexed { i, k -> SegmentedButton(kind == k, { kind = k }, SegmentedButtonDefaults.itemShape(i, Kind.entries.size), enabled = !busy) { Text(k.short) } }
         }
-        Text("価格・面積・築年は任意です。入力すると、近い条件の物件と比較できます。", style = MaterialTheme.typography.bodySmall)
+        Text("価格・面積・築年は任意です。価格と面積を入れると㎡単価を出して周辺の成約と比べ（価格スコア）、面積は同じ広さの成約への絞り込みと目安価格、築年は築年の近い成約への絞り込みと耐震・修繕時期の判定に使います。", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NumField(price, { price = it }, "価格（万円）", Modifier.weight(1f), if (submitted) priceError else null, enabled = !busy)
             NumField(area, { area = it }, "面積（㎡）", Modifier.weight(1f), if (submitted) areaError else null, enabled = !busy)
@@ -248,13 +248,27 @@ fun ItemRow(it: Item) {
 @Composable
 fun PriceTab(c: Candidate) {
     val p = c.prices
-    if (p == null) { Card { Text("直近2年に近隣の成約データがありません", Modifier.padding(12.dp)) }; return }
+    if (p == null) { Card { Text("直近2年に周辺の成約データがありません", Modifier.padding(12.dp)) }; return }
+    val i = c.input
+    Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("この物件の位置づけ", style = MaterialTheme.typography.titleMedium)
+        Text("入力: " + listOfNotNull(i.price?.let { "%,.0f万円".format(it) }, i.area?.let { "%.0f㎡".format(it) }, i.built?.let { "${it}年築" }).ifEmpty { listOf("なし") }.joinToString(" / "), style = MaterialTheme.typography.bodySmall)
+        Text("比較対象: ${p.scope}の直近2年の成約のうち、${p.simNote}（中央値 %.1f万円/㎡）".format(p.simMedian / 1e4), style = MaterialTheme.typography.bodySmall)
+        p.myUnit?.let { m ->
+            val r = (m / p.simMedian - 1) * 100
+            Text("この物件 %.1f万円/㎡ → 比較対象の中央値より %+.0f%%（%s）".format(m / 1e4, r, if (r < -5) "割安" else if (r <= 10) "相場並み" else "割高"), color = c.price.color(), fontWeight = FontWeight.Bold)
+        }
+        p.range?.let { (lo, hi) -> Text("この面積なら、比較対象の四分位から %,.0f〜%,.0f万円が目安".format(lo, hi), fontWeight = FontWeight.Medium) }
+        listOfNotNull(
+            if (i.price == null || i.area == null) "価格と面積を入力すると、㎡単価を相場と比べて価格スコアを出します" else null,
+            if (i.area == null) "面積を入力すると、同じ広さの成約に絞り、目安価格を出します" else null,
+            if (i.built == null && i.kind != Kind.LAND) "築年を入力すると、築年の近い成約に絞り、耐震・大規模修繕の時期も判定します" else null,
+        ).forEach { Text("・$it", style = MaterialTheme.typography.labelSmall, color = C_INFO) }
+    } }
     Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("${p.scope}の成約 ㎡単価（直近2年 ${p.units.size}件）", style = MaterialTheme.typography.titleMedium)
         Histogram(p.units, p.myUnit)
-        Text("全体の中央値 %.1f万円/㎡ ／ 面積・築年の近い${p.nSimilar}件の中央値 %.1f万円/㎡".format(p.median / 1e4, p.simMedian / 1e4))
-        p.myUnit?.let { m -> Text("この物件 %.1f万円/㎡（近い条件の中央値比 %+.0f%%、赤線）".format(m / 1e4, (m / p.simMedian - 1) * 100), color = c.price.color(), fontWeight = FontWeight.Bold) }
-        p.range?.let { (lo, hi) -> Text("近い条件の取引から見た目安: %,.0f〜%,.0f万円".format(lo, hi), fontWeight = FontWeight.Medium) }
+        Text("全体の中央値 %.1f万円/㎡ ／ 比較対象${p.nSimilar}件の中央値 %.1f万円/㎡".format(p.median / 1e4, p.simMedian / 1e4) + (p.myUnit?.let { "。赤線がこの物件" } ?: ""))
     } }
     Card { Column(Modifier.padding(12.dp)) {
         Text("地区の㎡単価の推移（四半期中央値・5年）", style = MaterialTheme.typography.titleMedium)
