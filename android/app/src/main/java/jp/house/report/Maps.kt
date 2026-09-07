@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.net.Uri
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -16,23 +17,64 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.BitmapDescriptor
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.Dash
 import com.google.android.gms.maps.model.Gap
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMapComposable
+import com.google.maps.android.compose.GroundOverlay
+import com.google.maps.android.compose.GroundOverlayPosition
 import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.Polygon
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.cos
+
+/** 区域フィルを1枚のビットマップに焼いて GroundOverlay で出す。数百〜数千の Polygon を直接置くと切替時と重なり部の描画が重い */
+private data class AreaImage(val bmp: Bitmap, val bounds: LatLngBounds)
+
+private fun rank(lv: Level) = when (lv) { Level.BAD -> 2; Level.WARN -> 1; else -> 0 }
+
+private fun renderAreas(areas: List<MapArea>): AreaImage? {
+    if (areas.isEmpty()) return null
+    var minLat = 90.0; var maxLat = -90.0; var minLon = 180.0; var maxLon = -180.0; var n = 0
+    areas.forEach { a -> a.ring.forEach { (la, lo) ->
+        if (la < minLat) minLat = la; if (la > maxLat) maxLat = la
+        if (lo < minLon) minLon = lo; if (lo > maxLon) maxLon = lo; n++
+    } }
+    if (n == 0 || maxLat <= minLat || maxLon <= minLon) return null
+    val wM = (maxLon - minLon) * 111320 * cos(Math.toRadians((minLat + maxLat) / 2))
+    val hM = (maxLat - minLat) * 110540
+    if (wM <= 0 || hM <= 0) return null
+    val w = 2048
+    val h = (w * hM / wM).toInt().coerceIn(64, 2048)
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val paints = Level.entries.associateWith { lv ->
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = lv.color().copy(alpha = 0.3f).toArgb() }
+    }
+    // 重なりは重い判定を後に描く（以前の半透明の重ね塗りより平坦になる）
+    areas.sortedBy { rank(it.level) }.forEach { a ->
+        val path = Path()
+        a.ring.forEachIndexed { i, (la, lo) ->
+            val x = ((lo - minLon) / (maxLon - minLon) * w).toFloat()
+            val y = ((maxLat - la) / (maxLat - minLat) * h).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        canvas.drawPath(path, paints.getValue(a.level))
+    }
+    return AreaImage(bmp, LatLngBounds(LatLng(minLat, minLon), LatLng(maxLat, maxLon)))
+}
 
 /** 層チップと同じ絵文字をマーカー画像にする。生成コストが高いため（絵文字・大きさ）毎に使い回す */
 private val emojiCache = mutableMapOf<String, BitmapDescriptor>()
@@ -127,11 +169,15 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
     val here = LatLng(c.geo.lat, c.geo.lon)
     val on = ov.areasOn(c)
     val areas = c.map.areas.filter { it.label in on && it.label !in ov.wide } + on.flatMap { ov.wide[it].orEmpty() }
-    // リングの頂点変換は数が多いため記憶し、再コンポーズ毎の作り直しを避ける（内容が同じなら再利用）
-    val polys = remember(areas) { areas.map { a -> a.ring.map { LatLng(it.first, it.second) } to a.level } }
-    polys.forEach { (pts, lv) ->
-        // clickable にすると地図タップ（地点選択）を奪うので、区域の判定は areaAt で自前に行う
-        Polygon(points = pts, clickable = false, fillColor = lv.color().copy(alpha = 0.3f), strokeWidth = 0f)
+    // フィルは1枚に焼いて出す。内容が変わった時だけ裏スレッドで作り直す（タップ判定はベクタのまま areaAt で行う）
+    var areaImg by remember { mutableStateOf<AreaImage?>(null) }
+    LaunchedEffect(areas) {
+        val img = withContext(Dispatchers.Default) { renderAreas(areas) }
+        val old = areaImg; areaImg = img; old?.bmp?.recycle()
+    }
+    areaImg?.let { (bmp, bounds) ->
+        val desc = remember(bmp) { BitmapDescriptorFactory.fromBitmap(bmp) }
+        GroundOverlay(image = desc, position = GroundOverlayPosition.create(bounds))
     }
     val circlePattern = remember { listOf(Dash(30f), Gap(20f)) }
     Circle(center = here, radius = 1000.0, fillColor = Color.Transparent, strokeColor = Color(0xFF37474F), strokeWidth = 6f, strokePattern = circlePattern)
