@@ -33,6 +33,7 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -64,8 +65,15 @@ fun HomeScreen(app: AppState) {
     val camera = rememberCameraPositionState { position = CameraPosition.fromLatLngZoom(TOKYO, 11f) }
     // 地図キー無しでは Maps SDK が未初期化のため CameraUpdateFactory が NPE になる。地図表示時のみ追従する
     val hasMap = mapsKey(ctx).isNotBlank()
-    LaunchedEffect(cur?.geo, hasMap) { if (hasMap) cur?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
-    val ov = cur?.let { rememberOverlay(it, app.reinfoKey) }
+    // 地図の追従はページ静止後に限定する。スワイプ途中の通過ページで作り直すと重い
+    var mapKey by remember { mutableStateOf(app.selected) }
+    LaunchedEffect(pager.currentPage, candidates.size) {
+        delay(250)
+        mapKey = candidates.getOrNull(pager.currentPage)?.key
+    }
+    val mapCand = mapKey?.let { app.results[it] } ?: cur
+    LaunchedEffect(mapCand?.geo, hasMap) { if (hasMap) mapCand?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
+    val ov = mapCand?.let { rememberOverlay(it, app.reinfoKey) }
     // 地図タップで選んだ地点。住所が取れたらカードで確認してから候補に追加する
     var pick by remember { mutableStateOf<LatLng?>(null) }
     var pickAddr by remember { mutableStateOf("") }
@@ -102,7 +110,7 @@ fun HomeScreen(app: AppState) {
                 uiSettings = MapUiSettings(zoomControlsEnabled = false, mapToolbarEnabled = false),
                 contentPadding = PaddingValues(top = 120.dp, bottom = 172.dp),
                 onMapClick = { ll ->
-                    if (cur != null && ov != null) ov.picked = ov.areaAt(cur, ll.latitude, ll.longitude)
+                    if (mapCand != null && ov != null) ov.picked = ov.areaAt(mapCand, ll.latitude, ll.longitude)
                     pick = ll
                 },
             ) {
@@ -116,7 +124,7 @@ fun HomeScreen(app: AppState) {
                             icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { app.selected = inp.key; false })
                     }
                 }
-                if (cur != null && ov != null) CandidateOverlay(cur, ov)
+                if (mapCand != null && ov != null) CandidateOverlay(mapCand, ov)
                 pick?.let { ll -> Marker(state = rememberMarkerState(position = ll), title = pickAddr.ifEmpty { "住所を取得中…" }, zIndex = 3f, alpha = 0.8f) }
             }
             // 選んだ地点の確認カード（シートの直上）
@@ -139,9 +147,9 @@ fun HomeScreen(app: AppState) {
                     Text("調査中… ${app.status}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp))
                 }
                 if (app.error.isNotEmpty()) Text("${app.error}（タップで閉じる）", color = C_BAD, style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp).clickable { app.error = "" })
-                if (cur != null && ov != null) {
-                    OverlayChips(cur, ov, Modifier.fillMaxWidth())
-                    ov.loadingLabel(cur).takeIf { it.isNotEmpty() }?.let { Text("周辺の$it を読み込み中…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp)) }
+                if (mapCand != null && ov != null) {
+                    OverlayChips(mapCand, ov, Modifier.fillMaxWidth())
+                    ov.loadingLabel(mapCand).takeIf { it.isNotEmpty() }?.let { Text("周辺の$it を読み込み中…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp)) }
                     ov.picked?.let { Text("${it.label}：${it.summary}", color = it.level.color(), style = MaterialTheme.typography.labelMedium, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp)) }
                 }
             }
