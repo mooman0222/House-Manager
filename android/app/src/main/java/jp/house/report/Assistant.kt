@@ -2,6 +2,7 @@ package jp.house.report
 
 import android.content.Context
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,7 +63,20 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
     var input by remember { mutableStateOf("") }
     val list = rememberLazyListState()
     val log = state.log
-    LaunchedEffect(log.size, log.lastOrNull()?.second?.length) { if (log.isNotEmpty()) list.animateScrollToItem(log.size - 1) }
+    // 生成中は末尾に追従する（項目先頭合わせだと吹き出しが伸びた分が画面外に残る）。
+    // ユーザーがドラッグで上に読んでいる間だけ止め、末尾まで戻ったら再開する
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(list) {
+        list.interactionSource.interactions.collect { i -> if (i is DragInteraction.Start) follow = false }
+    }
+    LaunchedEffect(log.size, log.lastOrNull()?.second?.length, follow) {
+        if (log.isEmpty()) return@LaunchedEffect
+        if (!follow) {
+            if (!list.canScrollForward) follow = true
+            return@LaunchedEffect
+        }
+        list.scrollToItem(log.size - 1, Int.MAX_VALUE)
+    }
 
     fun send(q: String) {
         if (state.busy.isNotEmpty() || q.isBlank()) return
