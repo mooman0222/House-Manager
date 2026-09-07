@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>おうちカルテ - 住所を入れるだけの住宅購入サポート</title>
+<meta name="description" content="住所を入力すると、災害リスク・建築条件・周辺施設・成約価格をまとめて表示するAndroidアプリ。地図表示と端末内で動くAIに対応。">
+<style>
+  :root { --bg: #faf8ff; --card: #ffffff; --ink: #1c1b1f; --sub: #49454f; --accent: #6750a4; --line: #e7e0ec; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; line-height: 1.8; }
+  header.hero { max-width: 1080px; margin: 0 auto; padding: 48px 20px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center; }
+  header.hero h1 { font-size: 2rem; margin: 0 0 8px; }
+  header.hero p.lead { color: var(--sub); margin: 0 0 20px; }
+  .btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none; padding: 12px 28px; border-radius: 999px; font-weight: bold; }
+  .btn small { font-weight: normal; opacity: .85; }
+  .shot { width: 100%; max-width: 300px; border-radius: 24px; border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,.12); display: block; margin: 0 auto; }
+  main { max-width: 1080px; margin: 0 auto; padding: 8px 20px 64px; }
+  section.feature { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 28px; margin: 24px 0; }
+  section.feature:nth-child(even) .shot-wrap { order: 2; }
+  section.feature h2 { font-size: 1.3rem; margin: 0 0 8px; }
+  section.feature p { color: var(--sub); margin: 0; }
+  .shots-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .shots-2 .shot { max-width: 220px; }
+  ol.steps { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 24px 24px 24px 48px; }
+  ol.steps li { margin: 8px 0; }
+  footer { max-width: 1080px; margin: 0 auto; padding: 0 20px 48px; color: var(--sub); font-size: .85rem; }
+  code { background: #eee; padding: 1px 6px; border-radius: 6px; }
+  @media (max-width: 720px) {
+    header.hero, section.feature { grid-template-columns: 1fr; }
+    section.feature:nth-child(even) .shot-wrap { order: 0; }
+    header.hero h1 { font-size: 1.6rem; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div>
+    <h1>おうちカルテ</h1>
+    <p class="lead">住所を入力するだけで、災害リスク・建築条件・周辺施設・成約価格をまとめて表示。地図で比べて、端末内のAIに相談できる住宅購入サポートアプリです。</p>
+    <a class="btn" href="https://github.com/mooman0222/House-Manager/releases/latest/download/house-report.apk">APKをダウンロード<br><small>Android 8.0以降対応</small></a>
+  </div>
+  <div><img class="shot" src="../images/hero-map.png" alt="地図画面。区域表示と施設ピン、候補カードが見える"></div>
+</header>
+
+<main>
+  <section class="feature">
+    <div class="shot-wrap"><img class="shot" src="../images/detail-price.png" alt="価格レポート。相場比較・ヒストグラム・推移グラフ"></div>
+    <div>
+      <h2>調べる - 災害・建築・価格を一括調査</h2>
+      <p>国土交通省 不動産情報ライブラリのデータから、洪水・土砂・液状化・用途地域・周辺施設を調査。成約価格との比較で相場比や目安価格も表示します。</p>
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="shot-wrap"><img class="shot" src="../images/compare.png" alt="候補比較表。安全・暮らし・価格などを並べて比較"></div>
+    <div>
+      <h2>比べる - 候補を横並びで比較</h2>
+      <p>気になる物件を候補に追加して、安全・暮らし・価格の判定を一覧で比較。住所タップで地図に戻って詳細を確認できます。</p>
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="shot-wrap"><img class="shot" src="../images/ai-chat.png" alt="AIアシスタントとの会話例"></div>
+    <div>
+      <h2>AIに相談 - 端末内で動作</h2>
+      <p>調査結果をもとに物件の比較や質問に答えます。モデルは端末に保存し、通信せずに動くのでプライバシーも安心です。</p>
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="shot-wrap shots-2">
+      <img class="shot" src="../images/import-progress.png" alt="物件ページ取り込み中の表示">
+      <img class="shot" src="../images/import-confirm.png" alt="取り込み内容の確認ダイアログ">
+    </div>
+    <div>
+      <h2>取り込む - 物件ページを共有するだけ</h2>
+      <p>ブラウザやポータルアプリの共有メニューから送ると、住所・価格・面積・築年を読み取って候補に追加。取り込み中は進捗を表示します。</p>
+    </div>
+  </section>
+
+  <section class="feature">
+    <div class="shot-wrap"><img class="shot" src="../images/settings-ai.png" alt="設定画面。AIモデルの選択とダウンロード"></div>
+    <div>
+      <h2>設定 - APIキーとAIモデル</h2>
+      <p>不動産情報ライブラリのAPIキー（無料申請）を入力し、端末のメモリに合ったAIモデルを選んでダウンロードします。</p>
+    </div>
+  </section>
+
+  <h2>インストール手順</h2>
+  <ol class="steps">
+    <li>上のボタンからAPKをダウンロードする</li>
+    <li>「提供元不明のアプリ」の許可を求められたらブラウザに許可する</li>
+    <li>起動後、設定画面で不動産情報ライブラリのAPIキーを入力する（<a href="https://www.reinfolib.mlit.go.jp/">reinfolib.mlit.go.jp</a> で無料申請）</li>
+    <li>AI機能を使う場合は設定画面からモデル（約2.6GB、Wi-Fi推奨）をダウンロードする。地図タブを使う場合は開発者向けの手順（README参照）で地図キーが必要です</li>
+  </ol>
+</main>
+
+<footer>
+  <p>このサービスは、国土交通省の不動産情報ライブラリのAPI機能を使用していますが、提供情報の最新性、正確性、完全性等が保証されたものではありません。回答は参考情報です。</p>
+  <p>ソースコード: <a href="https://github.com/mooman0222/House-Manager">mooman0222/House-Manager</a></p>
+</footer>
+
+</body>
+</html>
