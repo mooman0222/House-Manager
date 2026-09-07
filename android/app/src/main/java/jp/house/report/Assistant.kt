@@ -26,6 +26,11 @@ fun assistantSystem(analyzed: Collection<Candidate>, unanalyzed: List<Input>) = 
     if (unanalyzed.isNotEmpty()) append("保存済みだが未調査の物件（比べる画面で読み込むと使えます）: " + unanalyzed.joinToString("、") { it.address })
 }
 
+/** 表示は素の Text なので、残った Markdown 記号だけ落とす */
+fun String.stripMd(): String = replace(Regex("\\*\\*|__|`"), "")
+    .replace(Regex("(?m)^#{1,6}\\s*"), "")
+    .replace(Regex("(?m)^\\s*[-*]\\s+"), "・")
+
 /** 1つの会話の状態。画面から切り離して持ち、タブを切り替えても続くようにする。 */
 class ChatState {
     val log = mutableStateListOf<Pair<Boolean, String>>() // (ユーザー発言か, 本文)

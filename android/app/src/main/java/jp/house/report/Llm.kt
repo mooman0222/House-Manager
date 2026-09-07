@@ -1,8 +1,6 @@
 package jp.house.report
 
 import android.content.Context
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -78,17 +76,3 @@ fun Candidate.digest(): String = buildString {
     }
     pop?.takeIf { it.values.size >= 2 }?.let { appendLine("■将来推計人口（周辺250mメッシュ）: ${it.labels.first()}年 ${it.values.first().toInt()}人 → ${it.labels.last()}年 ${it.values.last().toInt()}人") }
 }
-
-private const val ADVISOR = "あなたは住宅購入を検討する人を支援する不動産アドバイザーです。以下の調査結果だけを根拠に、日本語で簡潔に答えてください。調査結果に無いことは推測せず「調査結果にはありません」と答えてください。出力はプレーンテキストで、Markdown 記法（**、#、- などの記号）は使わず、箇条書きは「・」で始めてください。\n\n"
-
-/** 表示は素の Text なので、残った Markdown 記号だけ落とす */
-fun String.stripMd(): String = replace(Regex("\\*\\*|__|`"), "")
-    .replace(Regex("(?m)^#{1,6}\\s*"), "")
-    .replace(Regex("(?m)^\\s*[-*]\\s+"), "・")
-private const val REVIEW = "この物件を講評してください。良い点・注意点・購入前に確認すべき事項を、それぞれ箇条書きで。"
-
-@Composable
-fun AiTab(c: Candidate, state: ChatState, modifier: Modifier = Modifier) = ChatPanel(
-    state, "調査結果をもとに、端末内のAIが答えます。回答は参考情報で、正確性は保証されません。", listOf(REVIEW),
-    { ctx -> Llm.chat(ctx, ADVISOR + c.digest()) }, modifier
-)

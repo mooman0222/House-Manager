@@ -203,8 +203,6 @@ fun Dot(lv: Level) = Box(Modifier.size(12.dp).clip(CircleShape).background(lv.co
 @Composable
 fun DetailScreen(c: Candidate, reinfoKey: String, isSaved: Boolean, onSave: () -> Unit, onBack: () -> Unit) {
     var t by remember { mutableStateOf(0) }
-    val chat = remember(c) { ChatState() }
-    DisposableEffect(c) { onDispose { chat.close() } }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(title = { Text(c.input.address, maxLines = 1, overflow = TextOverflow.Ellipsis) }, windowInsets = WindowInsets(0),
             navigationIcon = { IconButton(onBack) { Icon(Icons.Default.ArrowBack, "戻る") } },
@@ -213,9 +211,8 @@ fun DetailScreen(c: Candidate, reinfoKey: String, isSaved: Boolean, onSave: () -
             Text("${c.geo.title} / ${c.input.kind.label}", style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) { ScoreCircle("安全", c.safety); ScoreCircle("暮らし", c.living); ScoreCircle("価格", c.price) }
         }
-        TabRow(t) { listOf("概要", "地図", "価格", "人口", "AI").forEachIndexed { i, s -> Tab(t == i, { t = i }, text = { Text(s) }) } }
+        TabRow(t) { listOf("概要", "地図", "価格", "人口").forEachIndexed { i, s -> Tab(t == i, { t = i }, text = { Text(s) }) } }
         if (t == 1) MapTab(c, reinfoKey, Modifier.weight(1f))
-        else if (t == 4) AiTab(c, chat, Modifier.weight(1f))
         else Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when (t) {
                 0 -> c.sections.forEach { sec ->
