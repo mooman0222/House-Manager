@@ -53,7 +53,7 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
     if (!Llm.ready(ctx)) {
         Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("AIモデルが未導入です", style = MaterialTheme.typography.titleMedium)
-            Text("設定画面から Gemma 4 E2B（約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GB）をダウンロードすると、端末内で講評・質問・アプリ操作ができます。", style = MaterialTheme.typography.bodySmall)
+            Text("設定画面で AI モデル（現在の選択: ${Llm.model(ctx).name}、${Llm.model(ctx).gb}）をダウンロードすると、端末内で比較・質問に答えられます。", style = MaterialTheme.typography.bodySmall)
         }
         return
     }

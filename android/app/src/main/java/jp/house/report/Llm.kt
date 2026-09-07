@@ -10,25 +10,48 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** 端末内 LLM（Gemma 4 E2B / LiteRT-LM）。モデルは初回に filesDir へダウンロードする。 */
+/** 選べるモデル。すべて litert-community 公開（ゲート無し）の .litertlm */
+data class LlmModel(val id: String, val name: String, val note: String, val url: String, val bytes: Long) {
+    val gb get() = "%.1fGB".format(bytes / 1e9)
+    fun file(ctx: Context) = File(ctx.filesDir, "$id.litertlm")
+    fun ready(ctx: Context) = file(ctx).exists()
+}
+
+/** 端末内 LLM（LiteRT-LM）。モデルは設定で選び、初回に filesDir へダウンロードする。 */
 object Llm {
-    const val MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
-    const val MODEL_BYTES = 2_588_147_712L
+    val MODELS = listOf(
+        LlmModel("qwen3-0.6b", "Qwen3 0.6B（最軽量）", "RAM 3GB 級でも動く。日本語の質は低めで、短い要約向き", "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.litertlm", 614_236_160L),
+        LlmModel("qwen3-1.7b", "Qwen3 1.7B（軽量）", "RAM 4GB 級向け。E2B より速く、文章の質はやや落ちる", "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm", 977_184_032L),
+        LlmModel("gemma-4-E2B-it", "Gemma 4 E2B（標準）", "RAM 4GB 以上。日本語の質と速度のバランスが良い", "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm", 2_588_147_712L),
+        LlmModel("gemma-4-E4B-it", "Gemma 4 E4B（高性能）", "RAM 8GB 以上推奨。最も賢いが遅く、メモリを多く使う", "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm", 3_659_530_240L),
+    )
+    const val DEFAULT_MODEL = "gemma-4-E2B-it"
     /** 会話1本の上限（前置き＋履歴＋生成）。候補が増えると前置きだけで数千トークン使う */
     const val MAX_TOKENS = 16384
-    fun file(ctx: Context) = File(ctx.filesDir, "gemma-4-E2B-it.litertlm")
-    fun ready(ctx: Context) = file(ctx).exists()
+
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
+    fun selectedId(ctx: Context) = prefs(ctx).getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
+    fun model(ctx: Context) = MODELS.firstOrNull { it.id == selectedId(ctx) } ?: MODELS.first { it.id == DEFAULT_MODEL }
+    /** 選択を保存。読み込み済みエンジンが別モデルなら次回利用時に作り直す */
+    @Synchronized fun select(ctx: Context, id: String): Boolean {
+        if (busy) return false
+        prefs(ctx).edit().putString("model", id).apply()
+        if (engineModel != id) { engine?.close(); engine = null }
+        return true
+    }
+    fun ready(ctx: Context) = model(ctx).ready(ctx)
 
     /** .part に追記して途中から再開できる。IO スレッドで呼ぶ。 */
-    fun download(ctx: Context, progress: (Long) -> Unit) {
-        val dst = file(ctx); val part = File(dst.path + ".part")
+    fun download(ctx: Context, m: LlmModel, progress: (Long) -> Unit) {
+        val dst = m.file(ctx); val part = File(dst.path + ".part")
         val have = part.length()
-        val c = URL(MODEL_URL).openConnection() as HttpURLConnection
+        val c = URL(m.url).openConnection() as HttpURLConnection
         c.connectTimeout = 30_000; c.readTimeout = 60_000
         if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
         val code = c.responseCode
@@ -44,25 +67,33 @@ object Llm {
         if (!part.renameTo(dst)) throw ApiError("保存に失敗")
     }
 
-    /** 使用中なら削除しない（false を返す） */
-    @Synchronized fun delete(ctx: Context): Boolean {
-        if (!gate.tryAcquire()) return false
-        try { engine?.close(); engine = null; file(ctx).delete(); File(file(ctx).path + ".part").delete() } finally { gate.release() }
-        return true
-    }
-
     /** 推論の排他。1つのエンジンで会話生成と住所補正が並走しないようにする。ブロッキング呼び出しからも使えるよう Semaphore */
     val gate = java.util.concurrent.Semaphore(1, true)
     val busy get() = gate.availablePermits() == 0
 
+    /** 使用中なら削除しない（false を返す） */
+    @Synchronized fun delete(ctx: Context, m: LlmModel): Boolean {
+        if (!gate.tryAcquire()) return false
+        try {
+            if (engineModel == m.id) { engine?.close(); engine = null }
+            m.file(ctx).delete(); File(m.file(ctx).path + ".part").delete()
+        } finally { gate.release() }
+        return true
+    }
+
     private var engine: Engine? = null
-    /** 初回は読み込みに10秒以上かかる。IO スレッドで呼ぶ。プロセス生存中は使い回す。 */
-    @Synchronized fun engine(ctx: Context): Engine = engine ?: Engine(
-        EngineConfig(modelPath = file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = MAX_TOKENS)
-    ).also { it.initialize(); engine = it }
+    private var engineModel: String? = null
+    /** 初回は読み込みに10秒以上かかる。IO スレッドで呼ぶ。プロセス生存中は使い回し、モデルが変わったら作り直す。 */
+    @Synchronized fun engine(ctx: Context): Engine {
+        val m = model(ctx)
+        engine?.takeIf { engineModel == m.id }?.let { return it }
+        engine?.close()
+        return Engine(EngineConfig(modelPath = m.file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = MAX_TOKENS)).also { it.initialize(); engine = it; engineModel = m.id }
+    }
 
     fun chat(ctx: Context, system: String, temperature: Double = 1.0): Conversation = engine(ctx).createConversation(
-        ConversationConfig(systemInstruction = Contents.of(system), samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature))
+        // thinking は Qwen3 が既定で有効。長い思考の出力を抑え、応答だけ返させる
+        ConversationConfig(systemInstruction = Contents.of(system), samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature), thinkingConfig = ThinkingConfig(enableThinking = false))
     )
 
     /** 曖昧な住所を正式表記に直す。直せなければ null。 */
