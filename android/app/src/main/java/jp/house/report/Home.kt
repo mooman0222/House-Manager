@@ -196,6 +196,8 @@ private fun SearchBar(app: AppState, kind: Kind, onKind: (Kind) -> Unit) {
 private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: String?, expanded: Boolean, onExpand: () -> Unit) {
     val ctx = LocalContext.current
     var confirmRemove by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    if (editing) EditInputDialog(inp, "候補を編集", "価格・面積・築年を入れると相場比や目安価格が出ます。変更すると再調査します。", "保存して再調査", onRun = { app.replace(inp, it); editing = false }, onDismiss = { editing = false })
     if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false }, title = { Text("候補を削除") }, text = { Text("${inp.address} を候補から外しますか？") },
         confirmButton = { TextButton({ app.remove(inp); confirmRemove = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmRemove = false }) { Text("キャンセル") } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
@@ -206,6 +208,7 @@ private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: Str
                 Text(listOfNotNull(inp.kind.short, inp.built?.let { "築${java.time.LocalDate.now().year - it}年" }, inp.area?.let { "%.0f㎡".format(it) }, inp.price?.let { "%,.0f万円".format(it) },
                     c?.prices?.let { p -> p.myUnit?.let { "相場比 %+.0f%%".format((it / p.simMedian - 1) * 100) } }).joinToString("・"), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            IconButton({ editing = true }) { Icon(Icons.Default.Edit, "編集") }
             IconButton({ app.toggleSave(inp) }) { Icon(if (app.isSaved(inp)) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "保存", tint = if (app.isSaved(inp)) C_BAD else LocalContentColor.current) }
             IconButton({ confirmRemove = true }) { Icon(Icons.Default.Close, "削除") }
         }
@@ -275,7 +278,7 @@ fun PriceSection(c: Candidate) {
             if (i.price == null || i.area == null) "価格と面積を入力すると、㎡単価を相場と比べて価格スコアを出します" else null,
             if (i.area == null) "面積を入力すると、同じ広さの成約に絞り、目安価格を出します" else null,
             if (i.built == null && i.kind != Kind.LAND) "築年を入力すると、築年の近い成約に絞り、耐震・大規模修繕の時期も判定します" else null,
-        ).forEach { Text("・$it", style = MaterialTheme.typography.labelSmall, color = C_INFO) }
+        ).forEach { Text("・$it（カード右上の鉛筆から入力できます）", style = MaterialTheme.typography.labelSmall, color = C_INFO) }
     } }
     Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("${p.scope}の成約 ㎡単価（直近2年 ${p.units.size}件）", style = MaterialTheme.typography.titleMedium)

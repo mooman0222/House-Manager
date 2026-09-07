@@ -123,6 +123,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (selected == inp.key) selected = null
     }
     fun isSaved(inp: Input) = saved.any { it.key == inp.key }
+    /** 候補の条件を変える。同じ位置で置き換え、チェック状態を引き継いで再調査する */
+    fun replace(old: Input, new: Input) {
+        if (old.key == new.key) return
+        if (runningKey == old.key) running?.second?.cancel()
+        queue.removeAll { it.key == old.key }
+        saved = if (saved.any { it.key == old.key }) saved.map { if (it.key == old.key) new else it } else saved + new; storeSaved()
+        results.remove(old.key); failures.remove(old.key)
+        checks[old.key]?.let { checks[new.key] = it; checks.remove(old.key); persistChecks() }
+        selected = new.key
+        run(new)
+    }
     /** キャッシュ削除。調査中は拒否 */
     fun clearCache(): Boolean { if (running != null) return false; File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear(); return true }
     private fun loadSaved(): List<Input> { val f = File(ctx.filesDir, "candidates.json"); if (!f.exists()) return emptyList(); val a = JSONArray(f.readText()); return (0 until a.length()).map { Input.from(a.getJSONObject(it)) } }
@@ -135,29 +146,34 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
     fun toggleCheck(candidateKey: String, text: String) {
         val cur = checks[candidateKey].orEmpty(); checks[candidateKey] = if (text in cur) cur - text else cur + text
-        checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
+        persistChecks()
     }
+    private fun persistChecks() = checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
 
     // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら（生成が終わってから）作り直す
     val chat = ChatState(scope)
 
-    // AIモデルのダウンロード。-1 は停止中
-    var dlBytes by mutableStateOf(-1L)
+    // AI モデル。選択は prefs、ファイルの有無で導入状態を判定。modelsVersion は導入状態の再描画用
+    var modelId by mutableStateOf(Llm.selectedId(ctx))
+    var modelsVersion by mutableIntStateOf(0)
+    var downloading by mutableStateOf<String?>(null) // ダウンロード中のモデル id
+    var dlBytes by mutableStateOf(0L)
     var dlError by mutableStateOf("")
-    var modelReady by mutableStateOf(Llm.ready(ctx))
-    fun downloadModel() {
-        if (dlBytes >= 0) return
-        dlBytes = 0; dlError = ""
+    val modelReady get() = Llm.ready(ctx)
+    fun selectModel(id: String): Boolean { if (!Llm.select(ctx, id)) return false; modelId = id; chat.close(); return true }
+    fun downloadModel(m: LlmModel) {
+        if (downloading != null) return
+        downloading = m.id; dlBytes = 0; dlError = ""
         scope.launch {
-            try { withContext(Dispatchers.IO) { Llm.download(ctx) { dlBytes = it } }; modelReady = true }
+            try { withContext(Dispatchers.IO) { Llm.download(ctx, m) { dlBytes = it } } }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { dlError = "ダウンロードに失敗しました。通信環境を確認して再開してください（途中から続きます）。" }
-            finally { dlBytes = -1 }
+            catch (e: Exception) { dlError = "${m.name} のダウンロードに失敗しました。通信環境を確認して再開してください（途中から続きます）。" }
+            finally { downloading = null; modelsVersion++ }
         }
     }
     /** AI が使用中（生成・住所補正）なら削除しない */
     val aiInUse get() = chat.busy.isNotEmpty() || Llm.busy
-    fun deleteModel(): Boolean { if (aiInUse || !Llm.delete(ctx)) return false; modelReady = false; chat.close(); return true }
+    fun deleteModel(m: LlmModel): Boolean { if (aiInUse || !Llm.delete(ctx, m)) return false; modelsVersion++; if (m.id == modelId) chat.close(); return true }
 
     override fun onCleared() { chat.close() }
 }
@@ -220,9 +236,12 @@ fun ItemRow(it: Item) {
 
 @Composable
 fun SettingsScreen(app: AppState) {
-    var confirmDelete by remember { mutableStateOf(false) }
-    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("AIモデルを削除") }, text = { Text("約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルファイルを端末から削除します。AI機能は再ダウンロードまで使えません。") },
-        confirmButton = { TextButton({ if (!app.deleteModel()) app.dlError = "AIが使用中のため削除できません。生成や調査が終わってからお試しください。"; confirmDelete = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("キャンセル") } })
+    var confirmDelete by remember { mutableStateOf<LlmModel?>(null) }
+    confirmDelete?.let { m ->
+        AlertDialog(onDismissRequest = { confirmDelete = null }, title = { Text("AIモデルを削除") }, text = { Text("${m.name}（${m.gb}）を端末から削除します。再ダウンロードまでこのモデルは使えません。") },
+            confirmButton = { TextButton({ if (!app.deleteModel(m)) app.dlError = "AIが使用中のため削除できません。生成や調査が終わってからお試しください。"; confirmDelete = null }) { Text("削除") } },
+            dismissButton = { TextButton({ confirmDelete = null }) { Text("キャンセル") } })
+    }
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("設定", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(app.key, { app.saveKey(it) }, Modifier.fillMaxWidth(), label = { Text("不動産情報ライブラリ APIキー") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
@@ -232,15 +251,30 @@ fun SettingsScreen(app: AppState) {
         Text("物件ページの取り込み", style = MaterialTheme.typography.titleMedium)
         Text("ブラウザやポータルアプリの共有メニューから「物件レポート」を選ぶと、住所・価格・面積・築年を読み取って候補に追加できます。", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
-        Text("AIアシスタント（Gemma 4 E2B・端末内で動作）", style = MaterialTheme.typography.titleMedium)
-        Text("物件の比較・質問への回答、住所表記の補正、物件ページからの情報抽出に使います。約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルを端末に保存し、通信せずに動きます。メモリの少ない端末では動かない、または非常に遅いことがあります。", style = MaterialTheme.typography.bodySmall)
-        when {
-            app.modelReady -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (app.aiInUse) "導入済み（使用中）" else "導入済み"); OutlinedButton({ confirmDelete = true }, enabled = !app.aiInUse) { Text("モデルを削除") } }
-            app.dlBytes >= 0 -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("ダウンロード中… %d / %d MB".format(app.dlBytes / 1_000_000, Llm.MODEL_BYTES / 1_000_000), style = MaterialTheme.typography.bodySmall)
-                LinearProgressIndicator({ (app.dlBytes.toFloat() / Llm.MODEL_BYTES).coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+        Text("AIアシスタント（端末内で動作）", style = MaterialTheme.typography.titleMedium)
+        Text("物件の比較・質問への回答、住所表記の補正、物件ページからの情報抽出に使います。モデルは端末に保存し、通信せずに動きます。端末のメモリに合わせて選んでください。", style = MaterialTheme.typography.bodySmall)
+        app.modelsVersion // 導入状態が変わったら再描画
+        Llm.MODELS.forEach { m ->
+            val ready = m.ready(app.ctx); val selected = m.id == app.modelId; val dl = app.downloading == m.id
+            Card(colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected, { if (!app.selectModel(m.id)) app.dlError = "AIが使用中のため切り替えできません" }, enabled = !app.aiInUse)
+                        Column(Modifier.weight(1f)) {
+                            Text("${m.name}  ${m.gb}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(m.note, style = MaterialTheme.typography.labelSmall)
+                        }
+                        when {
+                            dl -> Text("%d MB".format(app.dlBytes / 1_000_000), style = MaterialTheme.typography.labelSmall)
+                            ready -> TextButton({ confirmDelete = m }, enabled = !app.aiInUse) { Text("削除") }
+                            else -> TextButton({ app.downloadModel(m) }, enabled = app.downloading == null) { Text("ダウンロード") }
+                        }
+                    }
+                    if (dl) LinearProgressIndicator({ (app.dlBytes.toFloat() / m.bytes).coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+                    else if (selected && !ready) Text("未導入です。ダウンロードすると AI タブが使えます（Wi-Fi 推奨）", style = MaterialTheme.typography.labelSmall, color = C_BAD)
+                    else if (selected && app.aiInUse) Text("使用中", style = MaterialTheme.typography.labelSmall)
+                }
             }
-            else -> Button({ app.downloadModel() }) { Text("モデルをダウンロード（Wi-Fi推奨）") }
         }
         if (app.dlError.isNotEmpty()) Text(app.dlError, color = C_BAD, style = MaterialTheme.typography.bodySmall)
         Text(DISCLAIMER, style = MaterialTheme.typography.labelSmall)

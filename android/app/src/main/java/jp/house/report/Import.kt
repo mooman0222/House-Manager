@@ -71,16 +71,21 @@ private fun extractByLlm(ctx: Context, text: String): Input {
 
 /** 取り込み結果の確認。編集してから調査できる */
 @Composable
-fun ImportDialog(inp: Input, onRun: (Input) -> Unit, onDismiss: () -> Unit) {
+fun ImportDialog(inp: Input, onRun: (Input) -> Unit, onDismiss: () -> Unit) =
+    EditInputDialog(inp, "物件ページを取り込みました", "読み取った内容を確認・修正してください。", "この内容で調査", onRun, onDismiss)
+
+/** 候補の住所・種別・価格・面積・築年を編集する共通ダイアログ */
+@Composable
+fun EditInputDialog(inp: Input, title: String, note: String, confirm: String, onRun: (Input) -> Unit, onDismiss: () -> Unit) {
     var address by remember { mutableStateOf(inp.address) }
     var kind by remember { mutableStateOf(inp.kind) }
     var price by remember { mutableStateOf(inp.price?.let { "%.0f".format(it) } ?: "") }
     var area by remember { mutableStateOf(inp.area?.let { "%.0f".format(it) } ?: "") }
     var built by remember { mutableStateOf(inp.built?.toString() ?: "") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("物件ページを取り込みました") },
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("読み取った内容を確認・修正してください。", style = MaterialTheme.typography.bodySmall)
+                Text(note, style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(address, { address = it }, Modifier.fillMaxWidth(), label = { Text("住所") }, singleLine = true, isError = address.isBlank())
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { Kind.entries.forEachIndexed { i, k -> SegmentedButton(kind == k, { kind = k }, SegmentedButtonDefaults.itemShape(i, Kind.entries.size)) { Text(k.short, style = MaterialTheme.typography.labelSmall) } } }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -90,6 +95,6 @@ fun ImportDialog(inp: Input, onRun: (Input) -> Unit, onDismiss: () -> Unit) {
                 if (kind != Kind.LAND) NumField(built, { built = it }, "築年（西暦）", Modifier.fillMaxWidth(), keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
             }
         },
-        confirmButton = { TextButton({ onRun(Input(address.trim(), kind, price.toDoubleOrNull(), area.toDoubleOrNull(), if (kind == Kind.LAND) null else built.toIntOrNull())) }, enabled = address.isNotBlank()) { Text("この内容で調査") } },
+        confirmButton = { TextButton({ onRun(Input(address.trim(), kind, price.toDoubleOrNull(), area.toDoubleOrNull(), if (kind == Kind.LAND) null else built.toIntOrNull())) }, enabled = address.isNotBlank()) { Text(confirm) } },
         dismissButton = { TextButton(onDismiss) { Text("キャンセル") } })
 }
