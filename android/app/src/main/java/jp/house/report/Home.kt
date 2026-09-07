@@ -174,7 +174,7 @@ private fun SearchBar(app: AppState, kind: Kind, onKind: (Kind) -> Unit) {
     Card(elevation = CardDefaults.cardElevation(4.dp)) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedTextField(address, { address = it }, Modifier.weight(1f), placeholder = { Text("住所を入力（例: 東京都千代田区丸の内1丁目）") }, singleLine = true, enabled = !busy,
+                OutlinedTextField(address, { address = it }, Modifier.weight(1f), placeholder = { Text("住所を入力（例: 文京区本郷2丁目）", maxLines = 1) }, singleLine = true, enabled = !busy,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { submit() }),
                     trailingIcon = { IconButton({ more = !more }) { Icon(if (more) Icons.Default.KeyboardArrowUp else Icons.Default.MoreVert, "詳細条件") } })
                 FilledIconButton({ submit() }, enabled = !busy) { Icon(Icons.Default.Search, "調べる") }
