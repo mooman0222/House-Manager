@@ -18,10 +18,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
@@ -212,7 +215,17 @@ private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: Str
     if (editing) EditInputDialog(inp, "候補を編集", "価格・面積・築年を入れると相場比や目安価格が出ます。変更すると再調査します。", "保存して再調査", onRun = { app.replace(inp, it); editing = false }, onDismiss = { editing = false })
     if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false }, title = { Text("候補を削除") }, text = { Text("${inp.address} を候補から外しますか？") },
         confirmButton = { TextButton({ app.remove(inp); confirmRemove = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmRemove = false }) { Text("キャンセル") } })
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+    // 内容が上に scroll できる間のフリング余波をシートに渡さない。ドラッグ自体には干渉しない
+    val scroll = rememberScrollState()
+    val keepOpen = remember(scroll) {
+        object : NestedScrollConnection {
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (available.y > 0 && scroll.canScrollBackward) return available
+                return Velocity.Zero
+            }
+        }
+    }
+    Column(Modifier.fillMaxSize().nestedScroll(keepOpen).verticalScroll(scroll).padding(horizontal = 16.dp)) {
         // ---- カード部分（約130dp） ----
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
