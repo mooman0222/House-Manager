@@ -111,6 +111,17 @@ fun pointOf(geom: JSONObject): Pair<Double, Double> {
     return a.getDouble(1) to a.getDouble(0)
 }
 
+/** 地図描画用に外周リングを (lat, lon) で返す。穴は無視する。 */
+fun ringsOf(geom: JSONObject): List<List<Pair<Double, Double>>> {
+    val coords = geom.optJSONArray("coordinates") ?: return emptyList()
+    val polys = when (geom.optString("type")) {
+        "Polygon" -> listOf(coords)
+        "MultiPolygon" -> (0 until coords.length()).map { coords.getJSONArray(it) }
+        else -> return emptyList()
+    }
+    return polys.mapNotNull { p -> p.optJSONArray(0)?.pts()?.map { (lo, la) -> la to lo }?.takeIf { it.size >= 3 } }
+}
+
 /** 数値抽出 ("5,000万円" → 5000.0) */
 fun num(s: Any?): Double? = s?.toString()?.replace(Regex("[^\\d.]"), "")?.toDoubleOrNull()
 
@@ -128,12 +139,17 @@ class Lib(private val key: String, val lat: Double, val lon: Double, private val
         return out
     }
 
-    fun here(api: String, z: Int = 15) = tiles(api, z).filter { contains(it.getJSONObject("geometry"), lon, lat) }.map { it.getJSONObject("properties") }
+    fun hereFeatures(api: String, z: Int = 15) = tiles(api, z).filter { contains(it.getJSONObject("geometry"), lon, lat) }
 
-    fun near(api: String, radius: Double = 1000.0, params: Map<String, String> = emptyMap()): List<Pair<Int, JSONObject>> =
+    fun here(api: String, z: Int = 15) = hereFeatures(api, z).map { it.getJSONObject("properties") }
+
+    fun nearFeatures(api: String, radius: Double = 1000.0, params: Map<String, String> = emptyMap()): List<Pair<Int, JSONObject>> =
         tiles(api, 15, 1, params).mapNotNull { f ->
             val (la, lo) = pointOf(f.getJSONObject("geometry"))
             val d = distM(lat, lon, la, lo)
-            if (d <= radius) d.roundToInt() to f.getJSONObject("properties") else null
+            if (d <= radius) d.roundToInt() to f else null
         }.sortedBy { it.first }
+
+    fun near(api: String, radius: Double = 1000.0, params: Map<String, String> = emptyMap()): List<Pair<Int, JSONObject>> =
+        nearFeatures(api, radius, params).map { it.first to it.second.getJSONObject("properties") }
 }

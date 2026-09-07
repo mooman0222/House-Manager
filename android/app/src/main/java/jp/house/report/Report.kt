@@ -18,9 +18,12 @@ enum class Level { OK, WARN, BAD, INFO }
 data class Item(val icon: String, val label: String, val level: Level, val summary: String, val detail: String = "")
 data class Section(val title: String, val items: List<Item>)
 data class Series(val labels: List<String>, val values: List<Double>)
+data class MapArea(val label: String, val level: Level, val summary: String, val ring: List<Pair<Double, Double>>)
+data class MapPin(val icon: String, val category: String, val name: String, val lat: Double, val lon: Double, val dist: Int)
+data class MapLayers(val areas: List<MapArea>, val pins: List<MapPin>)
 data class Prices(val units: List<Double>, val myUnit: Double?, val median: Double, val simMedian: Double, val range: Pair<Double, Double>?, val nSimilar: Int, val trend: Series, val recent: List<String>)
 
-data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val prices: Prices?, val pop: Series?) {
+data class Candidate(val input: Input, val geo: Geo, val sections: List<Section>, val map: MapLayers, val prices: Prices?, val pop: Series?) {
     val safety get() = worst(sections[0].items)
     val living get() = worst(sections[2].items)
     val price: Level get() {
@@ -42,6 +45,43 @@ private val FLOOD = mapOf(1 to "0.5m未満", 2 to "0.5〜3m", 3 to "3〜5m", 4 t
 private val PHEN = mapOf(1 to "急傾斜地の崩壊", 2 to "土石流", 3 to "地滑り")
 private fun depth(txt: String): Pair<Level, String> { val d = Regex("\\d+(\\.\\d+)?").find(txt)?.value?.toDouble() ?: 0.0; return (if (d >= 3) Level.BAD else Level.WARN) to "$txt の浸水想定" }
 
+/** wide=false は 250m メッシュなど、タイル境界で切れても誤解を生まない層。地図では周辺を広げない。 */
+class PolyLayer(val icon: String, val label: String, val api: String, val none: String = "該当なし", val noneLevel: Level = Level.OK, val detail: String = "", val wide: Boolean = true, val f: (JSONObject) -> Pair<Level, String>)
+
+val HAZARD_LAYERS = listOf(
+    PolyLayer("🌊", "洪水浸水", "XKT026", detail = "想定最大規模降雨での浸水深。3m以上は2階も浸水する目安") { val r = it.optInt("A31a_205"); (if (r >= 3) Level.BAD else Level.WARN) to "${FLOOD[r] ?: "ランク$r"}（${it.s("A31a_202")}）" },
+    PolyLayer("🌊", "高潮浸水", "XKT027") { depth(it.s("A49_003")) },
+    PolyLayer("🌊", "津波浸水", "XKT028") { depth(it.s("A40_003")) },
+    PolyLayer("⛰️", "土砂災害", "XKT029", detail = "特別警戒区域(レッドゾーン)は建築制限あり") { val sp = it.optInt("A33_002") == 2; (if (sp) Level.BAD else Level.WARN) to "${if (sp) "特別警戒区域" else "警戒区域"}（${PHEN[it.optInt("A33_001")] ?: ""}）" },
+    PolyLayer("〰️", "液状化傾向", "XKT025", none = "データなし", noneLevel = Level.INFO, detail = "地形区分に基づく傾向。個別のボーリング調査に代わるものではない", wide = false) { val l = it.optInt("liquefaction_tendency_level"); (if (l <= 2) Level.BAD else if (l == 3) Level.WARN else Level.OK) to "${it.s("note")}（${it.s("topographic_classification_name_ja")}）" },
+    PolyLayer("🏗️", "大規模盛土", "XKT020", detail = "地震時に滑動崩落の恐れがある造成地") { Level.WARN to "盛土造成地（${it.s("embankment_classification")}）" },
+    PolyLayer("⚠️", "災害危険区域", "XKT016") { Level.WARN to "指定区域内" },
+    PolyLayer("⛰️", "急傾斜地", "XKT022") { Level.WARN to "崩壊危険区域内" },
+    PolyLayer("⛰️", "地すべり", "XKT021") { Level.WARN to "防止区域内" },
+)
+
+val BUILDING_LAYERS = listOf(
+    PolyLayer("🏘️", "用途地域", "XKT002", none = "データなし", noneLevel = Level.INFO, detail = "商業系・工業系は隣地に高い建物や店舗が建ちやすく、日照・眺望が変わる可能性") {
+        val u = it.s("use_area_ja"); (if (Regex("商業|工業").containsMatchIn(u)) Level.WARN else Level.OK) to "$u 容積${it.s("u_floor_area_ratio_ja")} 建蔽${it.s("u_building_coverage_ratio_ja")}"
+    },
+    PolyLayer("🔥", "防火地域", "XKT014", none = "指定なし", noneLevel = Level.INFO) { Level.INFO to it.s("fire_prevention_ja") },
+    PolyLayer("📋", "地区計画", "XKT023", noneLevel = Level.INFO, detail = "建物の高さ・用途・外観に独自ルールがある地区") { Level.INFO to "${it.s("plan_name")}（${it.s("plan_type_ja")}）" },
+)
+
+val LIVING_LAYERS = listOf(
+    PolyLayer("🎒", "小学校区", "XKT004", none = "データなし", noneLevel = Level.INFO) { Level.INFO to it.s("A27_004_ja") },
+    PolyLayer("🎒", "中学校区", "XKT005", none = "データなし", noneLevel = Level.INFO) { Level.INFO to it.s("A32_004_ja") },
+)
+
+val POLY_LAYERS = HAZARD_LAYERS + BUILDING_LAYERS + LIVING_LAYERS
+
+/** 地図用に周辺8タイルまで広げ、keep と同じ区域の断片だけを拾う。タイル境界で区域が切れて見えるのを防ぐ。 */
+fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> = lib.tiles(l.api, 15, 1).flatMap { ft ->
+    val (lv, summary) = l.f(ft.getJSONObject("properties"))
+    if (summary !in keep) emptyList()
+    else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
+}
+
 fun quartersBack(n: Int): Pair<String, String> {
     val t = LocalDate.now()
     var y = t.year; var q = (t.monthValue - 1) / 3 + 1
@@ -54,37 +94,36 @@ fun quartersBack(n: Int): Pair<String, String> {
 
 private fun median(v: List<Double>): Double { val s = v.sorted(); val n = s.size; return if (n % 2 == 1) s[n / 2] else (s[n / 2 - 1] + s[n / 2]) / 2 }
 
-fun analyze(inp: Input, key: String, cacheDir: File, progress: (String) -> Unit): Candidate {
+/** fix は住所が見つからない時に表記を補正する（端末内 LLM）。null なら補正しない。 */
+fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)? = null, progress: (String) -> Unit): Candidate {
     progress("住所を検索中")
-    val g = geocode(inp.address)
+    val g = try { geocode(inp.address) } catch (e: ApiError) {
+        val f = fix ?: throw e
+        progress("住所をAIで補正中")
+        val alt = f(inp.address)?.takeIf { it.isNotBlank() } ?: throw e
+        progress("補正した住所で再検索: $alt")
+        geocode(alt)
+    }
     val L = Lib(key, g.lat, g.lon, cacheDir)
+    val areas = ArrayList<MapArea>()
+    val pins = ArrayList<MapPin>()
 
-    fun poly(icon: String, label: String, api: String, none: String = "該当なし", noneLevel: Level = Level.OK, detail: String = "", f: (JSONObject) -> Pair<Level, String>): Item {
-        progress(label)
-        val hits = L.here(api).map(f)
-        if (hits.isEmpty()) return Item(icon, label, noneLevel, none, detail)
-        val lv = hits.map { it.first }.let { l -> if (Level.BAD in l) Level.BAD else if (Level.WARN in l) Level.WARN else if (Level.OK in l) Level.OK else Level.INFO }
-        return Item(icon, label, lv, hits.map { it.second }.distinct().joinToString(" / "), detail)
+    fun poly(l: PolyLayer): Item {
+        progress(l.label)
+        val feats = L.hereFeatures(l.api)
+        val hits = feats.map { l.f(it.getJSONObject("properties")) }
+        feats.forEachIndexed { i, ft ->
+            ringsOf(ft.getJSONObject("geometry")).forEach { areas += MapArea(l.label, hits[i].first, hits[i].second, it) }
+        }
+        if (hits.isEmpty()) return Item(l.icon, l.label, l.noneLevel, l.none, l.detail)
+        val lv = hits.map { it.first }.let { s -> if (Level.BAD in s) Level.BAD else if (Level.WARN in s) Level.WARN else if (Level.OK in s) Level.OK else Level.INFO }
+        return Item(l.icon, l.label, lv, hits.map { it.second }.distinct().joinToString(" / "), l.detail)
     }
 
-    val hazard = listOf(
-        poly("🌊", "洪水浸水", "XKT026", detail = "想定最大規模降雨での浸水深。3m以上は2階も浸水する目安") { val r = it.optInt("A31a_205"); (if (r >= 3) Level.BAD else Level.WARN) to "${FLOOD[r] ?: "ランク$r"}（${it.s("A31a_202")}）" },
-        poly("🌊", "高潮浸水", "XKT027") { depth(it.s("A49_003")) },
-        poly("🌊", "津波浸水", "XKT028") { depth(it.s("A40_003")) },
-        poly("⛰️", "土砂災害", "XKT029", detail = "特別警戒区域(レッドゾーン)は建築制限あり") { val sp = it.optInt("A33_002") == 2; (if (sp) Level.BAD else Level.WARN) to "${if (sp) "特別警戒区域" else "警戒区域"}（${PHEN[it.optInt("A33_001")] ?: ""}）" },
-        poly("〰️", "液状化傾向", "XKT025", none = "データなし", noneLevel = Level.INFO, detail = "地形区分に基づく傾向。個別のボーリング調査に代わるものではない") { val l = it.optInt("liquefaction_tendency_level"); (if (l <= 2) Level.BAD else if (l == 3) Level.WARN else Level.OK) to "${it.s("note")}（${it.s("topographic_classification_name_ja")}）" },
-        poly("🏗️", "大規模盛土", "XKT020", detail = "地震時に滑動崩落の恐れがある造成地") { Level.WARN to "盛土造成地（${it.s("embankment_classification")}）" },
-        poly("⚠️", "災害危険区域", "XKT016") { Level.WARN to "指定区域内" },
-        poly("⛰️", "急傾斜地", "XKT022") { Level.WARN to "崩壊危険区域内" },
-        poly("⛰️", "地すべり", "XKT021") { Level.WARN to "防止区域内" },
-    )
+    val hazard = HAZARD_LAYERS.map { poly(it) }
 
     val building = ArrayList<Item>()
-    building += poly("🏘️", "用途地域", "XKT002", none = "データなし", noneLevel = Level.INFO, detail = "商業系・工業系は隣地に高い建物や店舗が建ちやすく、日照・眺望が変わる可能性") {
-        val u = it.s("use_area_ja"); (if (Regex("商業|工業").containsMatchIn(u)) Level.WARN else Level.OK) to "$u 容積${it.s("u_floor_area_ratio_ja")} 建蔽${it.s("u_building_coverage_ratio_ja")}"
-    }
-    building += poly("🔥", "防火地域", "XKT014", none = "指定なし", noneLevel = Level.INFO) { Level.INFO to it.s("fire_prevention_ja") }
-    building += poly("📋", "地区計画", "XKT023", noneLevel = Level.INFO, detail = "建物の高さ・用途・外観に独自ルールがある地区") { Level.INFO to "${it.s("plan_name")}（${it.s("plan_type_ja")}）" }
+    building += BUILDING_LAYERS.map { poly(it) }
     progress("都市計画道路")
     val road = L.tiles("XKT030", 15).map { lineDistM(it.getJSONObject("geometry"), g.lat, g.lon).toInt() to it.getJSONObject("properties") }.filter { it.first <= 50 }.minByOrNull { it.first }
     building += if (road == null) Item("🛣️", "都市計画道路", Level.OK, "50m以内になし") else Item("🛣️", "都市計画道路", Level.WARN, "約${road.first}m（${road.second.s("planning_road_ja")}）", "将来の道路拡幅で敷地の一部が収用される、または建築制限を受ける可能性")
@@ -98,20 +137,30 @@ fun analyze(inp: Input, key: String, cacheDir: File, progress: (String) -> Unit)
     }
 
     val living = ArrayList<Item>()
-    living += poly("🎒", "小学校区", "XKT004", none = "データなし", noneLevel = Level.INFO) { Level.INFO to it.s("A27_004_ja") }
-    living += poly("🎒", "中学校区", "XKT005", none = "データなし", noneLevel = Level.INFO) { Level.INFO to it.s("A32_004_ja") }
+    living += LIVING_LAYERS.map { poly(it) }
     progress("駅")
+    val stFeat = L.nearFeatures("XKT015", 1500.0)
     val seen = HashSet<String>()
-    val st = L.near("XKT015", 1500.0).filter { seen.add(it.second.s("S12_001_ja")) }.take(3).map { (d, q) ->
+    val stUniq = stFeat.filter { seen.add(it.second.getJSONObject("properties").s("S12_001_ja")) }
+    val st = stUniq.take(3).map { (d, ft) ->
+        val q = ft.getJSONObject("properties")
         val pax = (12 downTo 0).map { "S12_%03d".format(9 + 4 * it) }.firstNotNullOfOrNull { k -> q.optInt(k, 0).takeIf { it > 0 } }
         "${q.s("S12_001_ja")}(${q.s("S12_003_ja")}) ${d}m" + (pax?.let { " 乗降%,d人/日".format(it) } ?: "")
     }
-    val stD = L.near("XKT015", 1500.0).firstOrNull()?.first
+    val stD = stFeat.firstOrNull()?.first
+    stUniq.take(6).forEach { (d, ft) ->
+        val (la, lo) = pointOf(ft.getJSONObject("geometry"))
+        pins += MapPin("🚉", "駅", ft.getJSONObject("properties").s("S12_001_ja"), la, lo, d)
+    }
     living += Item("🚉", "最寄駅", if (stD == null) Level.BAD else if (stD < 800) Level.OK else Level.WARN, if (st.isEmpty()) "1.5km以内に駅なし" else st.joinToString(" / "))
     for ((label, api, name, icon) in listOf(listOf("保育園・幼稚園", "XKT007", "preSchoolName_ja", "🧸"), listOf("医療機関", "XKT010", "P04_002_ja", "🏥"), listOf("図書館", "XKT017", "P27_005_ja", "📚"))) {
         progress(label)
-        val fs = L.near(api)
-        living += Item(icon, label, if (fs.isEmpty() && label != "図書館") Level.WARN else Level.INFO, "1km以内に${fs.size}件" + (if (fs.isEmpty()) "" else "  最寄 " + fs.take(2).joinToString(", ") { "${it.second.s(name)} ${it.first}m" }))
+        val fs = L.nearFeatures(api)
+        living += Item(icon, label, if (fs.isEmpty() && label != "図書館") Level.WARN else Level.INFO, "1km以内に${fs.size}件" + (if (fs.isEmpty()) "" else "  最寄 " + fs.take(2).joinToString(", ") { "${it.second.getJSONObject("properties").s(name)} ${it.first}m" }))
+        fs.take(15).forEach { (d, ft) ->
+            val (la, lo) = pointOf(ft.getJSONObject("geometry"))
+            pins += MapPin(icon, label, ft.getJSONObject("properties").s(name), la, lo, d)
+        }
     }
     progress("将来推計人口")
     val popJ = L.here("XKT013").firstOrNull()
@@ -149,5 +198,5 @@ fun analyze(inp: Input, key: String, cacheDir: File, progress: (String) -> Unit)
         prices = Prices(units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, trend, rec)
     }
 
-    return Candidate(inp, g, listOf(Section("災害リスク", hazard), Section("建物・建築条件", building), Section("暮らし", living)), prices, pop)
+    return Candidate(inp, g, listOf(Section("災害リスク", hazard), Section("建物・建築条件", building), Section("暮らし", living)), MapLayers(areas, pins), prices, pop)
 }

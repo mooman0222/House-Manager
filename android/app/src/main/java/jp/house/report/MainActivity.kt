@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -57,23 +58,46 @@ fun App() {
     var tab by remember { mutableStateOf(0) }
     var detail by remember { mutableStateOf<Candidate?>(null) }
     val results = remember { mutableStateMapOf<String, Candidate>() }
+    val failures = remember { mutableStateMapOf<String, String>() }
     var saved by remember { mutableStateOf(loadSaved(ctx)) }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     fun run(inp: Input, onDone: (Candidate) -> Unit) {
+        if (status.isNotEmpty()) return
         results[inp.key]?.let { onDone(it); return }
         if (key.isBlank()) { error = "設定画面でAPIキーを入力してください"; tab = 2; return }
-        status = "開始"; error = ""
+        status = "開始"; error = ""; failures.remove(inp.key)
+        val apiKey = key.trim()
+        val fix: ((String) -> String?)? = if (Llm.ready(ctx)) { { a -> runCatching { Llm.normalizeAddress(ctx, a) }.getOrNull() } } else null
         scope.launch {
             try {
-                val c = withContext(Dispatchers.IO) { analyze(inp, key.trim(), File(ctx.cacheDir, "tiles")) { status = it } }
+                val c = withContext(Dispatchers.IO) { analyze(inp, apiKey, File(ctx.cacheDir, "tiles"), fix) { progress -> scope.launch { status = progress } } }
                 results[inp.key] = c; onDone(c)
-            } catch (e: Exception) { error = "エラー: ${e.message}" }
-            status = ""
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "調査に失敗しました。通信環境とAPIキーをご確認のうえ、再度お試しください。"
+                failures[inp.key] = error
+            } finally { status = "" }
         }
     }
+    // AIモデルのダウンロード。-1 は停止中。画面を離れても続くよう App の scope で回す
+    var dlBytes by remember { mutableStateOf(-1L) }
+    var dlError by remember { mutableStateOf("") }
+    var modelReady by remember { mutableStateOf(Llm.ready(ctx)) }
+    fun downloadModel() {
+        if (dlBytes >= 0) return
+        dlBytes = 0; dlError = ""
+        scope.launch {
+            try { withContext(Dispatchers.IO) { Llm.download(ctx) { dlBytes = it } }; modelReady = true }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { dlError = "ダウンロードに失敗しました。通信環境を確認して再開してください（途中から続きます）。" }
+            finally { dlBytes = -1 }
+        }
+    }
+    fun deleteModel() { Llm.delete(ctx); modelReady = false }
     fun toggleSave(inp: Input) { saved = if (saved.any { it.key == inp.key }) saved.filter { it.key != inp.key } else saved + inp; storeSaved(ctx, saved) }
 
     BackHandler(detail != null) { detail = null }
@@ -87,10 +111,10 @@ fun App() {
         Box(Modifier.padding(pad).fillMaxSize()) {
             val d = detail
             when {
-                d != null -> DetailScreen(d, saved.any { it.key == d.input.key }, { toggleSave(d.input) }) { detail = null }
+                d != null -> DetailScreen(d, key.trim(), saved.any { it.key == d.input.key }, { toggleSave(d.input) }) { detail = null }
                 tab == 0 -> SearchScreen(saved, status, error, onRun = { run(it) { c -> detail = c } }, onOpen = { run(it) { c -> detail = c } })
-                tab == 1 -> CompareScreen(saved, results, status, onLoad = { run(it) {} }, onOpen = { detail = results[it.key] }, onRemove = { toggleSave(it) })
-                else -> SettingsScreen(key, { key = it; prefs.edit().putString("key", it).apply() }) { File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear() }
+                tab == 1 -> CompareScreen(saved, results, status, failures, onLoad = { run(it) {} }, onOpen = { detail = results[it.key] }, onRemove = { toggleSave(it); failures.remove(it.key) })
+                else -> SettingsScreen(key, { key = it; prefs.edit().putString("key", it).apply() }, modelReady, dlBytes, dlError, ::downloadModel, ::deleteModel) { File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear() }
             }
         }
     }
@@ -104,19 +128,40 @@ fun SearchScreen(saved: List<Input>, status: String, error: String, onRun: (Inpu
     var price by rememberSaveable { mutableStateOf("") }
     var area by rememberSaveable { mutableStateOf("") }
     var built by rememberSaveable { mutableStateOf("") }
+    var submitted by rememberSaveable { mutableStateOf(false) }
     val busy = status.isNotEmpty()
+    val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+    val priceValue = price.trim().toDoubleOrNull()
+    val areaValue = area.trim().toDoubleOrNull()
+    val builtValue = built.trim().toIntOrNull()
+    val addressError = if (address.isBlank()) "住所を入力してください" else null
+    val priceError = if (price.isNotBlank() && (priceValue == null || !priceValue.isFinite() || priceValue <= 0.0)) "0より大きい数値を入力してください" else null
+    val areaError = if (area.isNotBlank() && (areaValue == null || !areaValue.isFinite() || areaValue <= 0.0)) "0より大きい数値を入力してください" else null
+    val builtError = if (kind != Kind.LAND && built.isNotBlank() && (builtValue == null || builtValue !in 1..currentYear)) "1〜${currentYear}年の西暦を入力してください" else null
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("物件を調べる", style = MaterialTheme.typography.headlineSmall)
-        OutlinedTextField(address, { address = it }, Modifier.fillMaxWidth(), label = { Text("住所") }, singleLine = true)
+        Text("住所と物件の種類を指定して、周辺環境や近隣の取引価格を調べます。", style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(address, { address = it }, Modifier.fillMaxWidth(), label = { Text("住所（必須）") },
+            placeholder = { Text("例：東京都千代田区丸の内1丁目") }, singleLine = true, enabled = !busy,
+            isError = submitted && addressError != null,
+            supportingText = { Text(if (submitted && addressError != null) addressError else "都道府県から番地まで入力すると、場所を特定しやすくなります") })
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            Kind.entries.forEachIndexed { i, k -> SegmentedButton(kind == k, { kind = k }, SegmentedButtonDefaults.itemShape(i, Kind.entries.size)) { Text(k.short) } }
+            Kind.entries.forEachIndexed { i, k -> SegmentedButton(kind == k, { kind = k }, SegmentedButtonDefaults.itemShape(i, Kind.entries.size), enabled = !busy) { Text(k.short) } }
         }
+        Text("価格・面積・築年は任意です。入力すると、近い条件の物件と比較できます。", style = MaterialTheme.typography.bodySmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumField(price, { price = it }, "価格(万円)", Modifier.weight(1f))
-            NumField(area, { area = it }, "面積(㎡)", Modifier.weight(1f))
-            NumField(built, { built = it }, "築年(西暦)", Modifier.weight(1f))
+            NumField(price, { price = it }, "価格（万円）", Modifier.weight(1f), if (submitted) priceError else null, enabled = !busy)
+            NumField(area, { area = it }, "面積（㎡）", Modifier.weight(1f), if (submitted) areaError else null, enabled = !busy)
         }
-        Button(enabled = !busy && address.isNotBlank(), modifier = Modifier.fillMaxWidth(), onClick = { onRun(Input(address.trim(), kind, price.toDoubleOrNull(), area.toDoubleOrNull(), built.toIntOrNull())) }) {
+        if (kind != Kind.LAND) {
+            NumField(built, { built = it }, "築年（西暦・例：2005）", Modifier.fillMaxWidth(), if (submitted) builtError else null, KeyboardType.Number, enabled = !busy)
+        }
+        Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+            submitted = true
+            if (addressError == null && priceError == null && areaError == null && builtError == null) {
+                onRun(Input(address.trim(), kind, priceValue, areaValue, if (kind == Kind.LAND) null else builtValue))
+            }
+        }) {
             Text(if (busy) "調査中… $status" else "調べる")
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -126,15 +171,17 @@ fun SearchScreen(saved: List<Input>, status: String, error: String, onRun: (Inpu
             saved.forEach { s ->
                 ListItem(headlineContent = { Text(s.address) },
                     supportingContent = { Text(listOfNotNull(s.kind.short, s.price?.let { "%.0f万円".format(it) }, s.area?.let { "%.0f㎡".format(it) }, s.built?.let { "${it}年築" }).joinToString(" / ")) },
-                    modifier = Modifier.clickable { onOpen(s) })
+                    modifier = Modifier.clickable(enabled = !busy) { onOpen(s) })
             }
         }
     }
 }
 
 @Composable
-fun NumField(v: String, on: (String) -> Unit, label: String, m: Modifier) =
-    OutlinedTextField(v, on, m, label = { Text(label) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+fun NumField(v: String, on: (String) -> Unit, label: String, m: Modifier, error: String? = null, keyboardType: KeyboardType = KeyboardType.Decimal, enabled: Boolean = true) =
+    OutlinedTextField(v, on, m, label = { Text(label) }, singleLine = true, enabled = enabled,
+        isError = error != null, supportingText = error?.let { message -> { Text(message) } },
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType))
 
 @Composable
 fun ScoreCircle(title: String, lv: Level) {
@@ -149,16 +196,20 @@ fun Dot(lv: Level) = Box(Modifier.size(12.dp).clip(CircleShape).background(lv.co
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DetailScreen(c: Candidate, isSaved: Boolean, onSave: () -> Unit, onBack: () -> Unit) {
+fun DetailScreen(c: Candidate, reinfoKey: String, isSaved: Boolean, onSave: () -> Unit, onBack: () -> Unit) {
     var t by remember { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         TopAppBar(title = { Text(c.input.address, maxLines = 1, overflow = TextOverflow.Ellipsis) }, windowInsets = WindowInsets(0),
             navigationIcon = { IconButton(onBack) { Icon(Icons.Default.ArrowBack, "戻る") } },
             actions = { IconButton(onSave) { Icon(if (isSaved) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "保存", tint = if (isSaved) C_BAD else LocalContentColor.current) } })
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("${c.geo.title} / ${c.input.kind.label}", style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) { ScoreCircle("安全", c.safety); ScoreCircle("暮らし", c.living); ScoreCircle("価格", c.price) }
-            TabRow(t) { listOf("概要", "価格", "人口").forEachIndexed { i, s -> Tab(t == i, { t = i }, text = { Text(s) }) } }
+        }
+        TabRow(t) { listOf("概要", "地図", "価格", "人口", "AI").forEachIndexed { i, s -> Tab(t == i, { t = i }, text = { Text(s) }) } }
+        if (t == 1) MapTab(c, reinfoKey, Modifier.weight(1f))
+        else if (t == 4) AiTab(c, Modifier.weight(1f))
+        else Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when (t) {
                 0 -> c.sections.forEach { sec ->
                     Card { Column(Modifier.padding(12.dp)) {
@@ -166,7 +217,7 @@ fun DetailScreen(c: Candidate, isSaved: Boolean, onSave: () -> Unit, onBack: () 
                         sec.items.forEach { ItemRow(it) }
                     } }
                 }
-                1 -> PriceTab(c)
+                2 -> PriceTab(c)
                 else -> Card { Column(Modifier.padding(12.dp)) {
                     Text("将来推計人口（周辺250mメッシュ）", style = MaterialTheme.typography.titleMedium)
                     c.pop?.let { LineChart(it, "人") } ?: Text("データなし")
@@ -214,12 +265,24 @@ fun PriceTab(c: Candidate) {
 private val ROWS = listOf("安全", "暮らし", "価格", "洪水浸水", "土砂災害", "液状化傾向", "用途地域", "都市計画道路", "築年", "最寄駅", "保育園・幼稚園", "小学校区", "将来人口", "㎡単価中央値", "目安価格")
 
 @Composable
-fun CompareScreen(saved: List<Input>, results: Map<String, Candidate>, status: String, onLoad: (Input) -> Unit, onOpen: (Input) -> Unit, onRemove: (Input) -> Unit) {
-    val missing = saved.firstOrNull { results[it.key] == null }
+fun CompareScreen(saved: List<Input>, results: Map<String, Candidate>, status: String, failures: Map<String, String>, onLoad: (Input) -> Unit, onOpen: (Input) -> Unit, onRemove: (Input) -> Unit) {
+    val missing = saved.firstOrNull { results[it.key] == null && it.key !in failures }
+    var pendingRemoval by remember { mutableStateOf<Input?>(null) }
+    pendingRemoval?.let { inp ->
+        AlertDialog(onDismissRequest = { pendingRemoval = null }, title = { Text("候補を削除") },
+            text = { Text("${inp.address} を保存した候補から削除しますか？") },
+            confirmButton = { TextButton({ onRemove(inp); pendingRemoval = null }) { Text("削除") } },
+            dismissButton = { TextButton({ pendingRemoval = null }) { Text("キャンセル") } })
+    }
     LaunchedEffect(missing?.key, status) { if (missing != null && status.isEmpty()) onLoad(missing) }
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("候補を比べる", style = MaterialTheme.typography.headlineSmall)
         if (saved.isEmpty()) { Text("物件画面の♥で候補を保存すると、ここに並びます"); return }
+        Text("左右にスクロールして比較できます。住所をタップすると詳細が開きます。", style = MaterialTheme.typography.bodySmall)
+        saved.filter { it.key in failures }.forEach { inp ->
+            Text("${inp.address}: ${failures[inp.key]}", color = C_BAD, style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { onLoad(inp) }, enabled = status.isEmpty()) { Text("再試行") }
+        }
         if (status.isNotEmpty()) { Text("読み込み中… $status", style = MaterialTheme.typography.bodySmall); LinearProgressIndicator(Modifier.fillMaxWidth()) }
         Row(Modifier.horizontalScroll(rememberScrollState()).verticalScroll(rememberScrollState())) {
             Column { Spacer(Modifier.height(64.dp)); ROWS.forEach { Cell(it, null, 96.dp, bold = true) } }
@@ -228,7 +291,7 @@ fun CompareScreen(saved: List<Input>, results: Map<String, Candidate>, status: S
                 Column(Modifier.width(150.dp)) {
                     Row(Modifier.height(64.dp).clickable(enabled = c != null) { onOpen(inp) }, verticalAlignment = Alignment.CenterVertically) {
                         Text(inp.address, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        IconButton({ onRemove(inp) }, Modifier.size(24.dp)) { Icon(Icons.Default.Close, "削除") }
+                        IconButton({ pendingRemoval = inp }, Modifier.size(48.dp)) { Icon(Icons.Default.Close, "${inp.address}を削除") }
                     }
                     ROWS.forEach { r -> val (lv, txt) = cell(c, r); Cell(txt, lv, 150.dp) }
                 }
@@ -260,12 +323,27 @@ fun Cell(text: String, lv: Level?, w: Dp, bold: Boolean = false) {
 }
 
 @Composable
-fun SettingsScreen(key: String, onKey: (String) -> Unit, onClear: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+fun SettingsScreen(key: String, onKey: (String) -> Unit, modelReady: Boolean, dlBytes: Long, dlError: String, onDownload: () -> Unit, onDeleteModel: () -> Unit, onClear: () -> Unit) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("AIモデルを削除") }, text = { Text("約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルファイルを端末から削除します。AI機能は再ダウンロードまで使えません。") },
+        confirmButton = { TextButton({ onDeleteModel(); confirmDelete = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("キャンセル") } })
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("設定", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(key, onKey, Modifier.fillMaxWidth(), label = { Text("不動産情報ライブラリ APIキー") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
         Text("APIキーはこの端末の中にだけ保存されます。キーは国土交通省 不動産情報ライブラリ（reinfolib.mlit.go.jp）で個人でも無料で申請できます。", style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClear) { Text("取得データのキャッシュを削除") }
+        HorizontalDivider()
+        Text("AIアシスタント（Gemma 4 E2B・端末内で動作）", style = MaterialTheme.typography.titleMedium)
+        Text("物件の講評や質問への回答、住所表記の補正に使います。約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルを端末に保存し、通信せずに動きます。メモリの少ない端末では動かない、または非常に遅いことがあります。", style = MaterialTheme.typography.bodySmall)
+        when {
+            modelReady -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("導入済み"); OutlinedButton({ confirmDelete = true }) { Text("モデルを削除") } }
+            dlBytes >= 0 -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("ダウンロード中… %d / %d MB".format(dlBytes / 1_000_000, Llm.MODEL_BYTES / 1_000_000), style = MaterialTheme.typography.bodySmall)
+                LinearProgressIndicator({ (dlBytes.toFloat() / Llm.MODEL_BYTES).coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+            }
+            else -> Button(onDownload) { Text("モデルをダウンロード（Wi-Fi推奨）") }
+        }
+        if (dlError.isNotEmpty()) Text(dlError, color = C_BAD, style = MaterialTheme.typography.bodySmall)
         Text("このサービスは、国土交通省の不動産情報ライブラリのAPI機能を使用していますが、提供情報の最新性、正確性、完全性等が保証されたものではありません", style = MaterialTheme.typography.labelSmall)
     }
 }
