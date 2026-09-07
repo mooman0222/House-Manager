@@ -268,8 +268,20 @@ fun DetailContent(app: AppState, c: Candidate) {
             c.pop?.let { LineChart(it, "人") } ?: Text("データなし")
         } }
         ChecklistCard(app, c)
+        MemoCard(app, c)
         Text(DISCLAIMER, style = MaterialTheme.typography.labelSmall)
     }
+}
+
+/** 物件毎の自由メモ。入力のたびに端末へ保存する */
+@Composable
+fun MemoCard(app: AppState, c: Candidate) {
+    var text by remember(c.input.key) { mutableStateOf(app.memos[c.input.key].orEmpty()) }
+    Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("メモ", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(text, { text = it; app.saveMemo(c.input.key, it) }, Modifier.fillMaxWidth(),
+            placeholder = { Text("内見の印象・気になる点など") }, minLines = 2, maxLines = 6)
+    } }
 }
 
 @Composable

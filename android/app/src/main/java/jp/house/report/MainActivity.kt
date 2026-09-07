@@ -138,6 +138,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
         saved = if (saved.any { it.key == old.key }) saved.map { if (it.key == old.key) new else it } else saved + new; storeSaved()
         results.remove(old.key); failures.remove(old.key)
         checks[old.key]?.let { checks[new.key] = it; checks.remove(old.key); persistChecks() }
+        customChecks[old.key]?.let { customChecks[new.key] = it; customChecks.remove(old.key); persistCustom() }
+        memos[old.key]?.let { memos[new.key] = it; memos.remove(old.key); persistMemos() }
         selected = new.key
         run(new)
     }
@@ -156,6 +158,33 @@ class AppState(application: Application) : AndroidViewModel(application) {
         persistChecks()
     }
     private fun persistChecks() = checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
+
+    // 自分で追加したチェック項目（候補キー → 文の列）。自動生成と合わせて表示する
+    private val customFile = File(ctx.filesDir, "custom_checks.json")
+    val customChecks = mutableStateMapOf<String, List<String>>().apply {
+        if (customFile.exists()) { val j = JSONObject(customFile.readText()); j.keys().forEach { k -> val a = j.getJSONArray(k); put(k, (0 until a.length()).map { a.getString(it) }) } }
+    }
+    fun addCustomCheck(candidateKey: String, text: String) {
+        val t = text.trim(); if (t.isEmpty() || t in customChecks[candidateKey].orEmpty()) return
+        customChecks[candidateKey] = customChecks[candidateKey].orEmpty() + t; persistCustom()
+    }
+    fun removeCustomCheck(candidateKey: String, text: String) {
+        customChecks[candidateKey] = customChecks[candidateKey].orEmpty() - text
+        if (customChecks[candidateKey].isNullOrEmpty()) customChecks.remove(candidateKey)
+        persistCustom()
+    }
+    private fun persistCustom() = customFile.writeText(JSONObject(customChecks.mapValues { JSONArray(it.value) }.toMap()).toString())
+
+    // 物件毎の自由メモ（候補キー → 本文）。入力のたびに保存する
+    private val memoFile = File(ctx.filesDir, "memos.json")
+    val memos = mutableStateMapOf<String, String>().apply {
+        if (memoFile.exists()) { val j = JSONObject(memoFile.readText()); j.keys().forEach { k -> put(k, j.getString(k)) } }
+    }
+    fun saveMemo(candidateKey: String, text: String) {
+        if (text.isBlank()) memos.remove(candidateKey) else memos[candidateKey] = text
+        persistMemos()
+    }
+    private fun persistMemos() = memoFile.writeText(JSONObject(memos.toMap()).toString())
 
     // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら（生成が終わってから）作り直す
     val chat = ChatState(scope)

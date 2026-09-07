@@ -2,8 +2,14 @@ package jp.house.report
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -45,8 +51,11 @@ fun checklist(c: Candidate): List<Check> {
 fun ChecklistCard(app: AppState, c: Candidate) {
     val list = checklist(c)
     val done = app.checks[c.input.key].orEmpty()
+    val customs = app.customChecks[c.input.key].orEmpty()
+    val all = list.map { it.text } + customs
+    var adding by remember(c.input.key) { mutableStateOf("") }
     Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("購入前に確認すること（${done.count { d -> list.any { it.text == d } }}/${list.size}）", style = MaterialTheme.typography.titleMedium)
+        Text("購入前に確認すること（${done.count { it in all }}/${all.size}）", style = MaterialTheme.typography.titleMedium)
         Text("判定結果から作った質問リストです。チェックは端末に保存されます。", style = MaterialTheme.typography.labelSmall)
         if (!c.done) Text("調査が終わると項目が増えます", style = MaterialTheme.typography.labelSmall, color = C_INFO)
         listOf("売主" to "売主・仲介に聞く", "内見" to "内見で見る", "管理" to "管理会社・管理組合で確認", "自治体" to "自治体で確認").forEach { (who, title) ->
@@ -62,6 +71,18 @@ fun ChecklistCard(app: AppState, c: Candidate) {
                     }
                 }
             }
+        }
+        Spacer(Modifier.height(4.dp)); Text("自分で追加", style = MaterialTheme.typography.labelLarge)
+        customs.forEach { t ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(t in done, { app.toggleCheck(c.input.key, t) })
+                Text(t, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                IconButton({ app.removeCustomCheck(c.input.key, t) }) { Icon(Icons.Default.Close, "削除") }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(adding, { adding = it }, Modifier.weight(1f), placeholder = { Text("確認したいことを入力") }, singleLine = true)
+            TextButton({ app.addCustomCheck(c.input.key, adding); adding = "" }, enabled = adding.isNotBlank()) { Text("追加") }
         }
     } }
 }
