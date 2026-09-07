@@ -109,9 +109,11 @@ fun HomeScreen(app: AppState) {
                 candidates.forEach { inp ->
                     val c = app.results[inp.key] ?: return@forEach
                     key(inp.key) {
+                        // defaultMarker はビットマップ生成を伴うため判定色毎に記憶する
+                        val hue = when (c.safety) { Level.OK -> BitmapDescriptorFactory.HUE_GREEN; Level.WARN -> BitmapDescriptorFactory.HUE_YELLOW; Level.BAD -> BitmapDescriptorFactory.HUE_RED; Level.INFO -> BitmapDescriptorFactory.HUE_AZURE }
+                        val icon = remember(hue) { BitmapDescriptorFactory.defaultMarker(hue) }
                         Marker(state = rememberMarkerState(position = LatLng(c.geo.lat, c.geo.lon)), title = inp.address, snippet = "安全 ${c.safety.word()} / 暮らし ${c.living.word()} / 価格 ${c.price.word()}",
-                            icon = BitmapDescriptorFactory.defaultMarker(when (c.safety) { Level.OK -> BitmapDescriptorFactory.HUE_GREEN; Level.WARN -> BitmapDescriptorFactory.HUE_YELLOW; Level.BAD -> BitmapDescriptorFactory.HUE_RED; Level.INFO -> BitmapDescriptorFactory.HUE_AZURE }),
-                            zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { app.selected = inp.key; false })
+                            icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f, onClick = { app.selected = inp.key; false })
                     }
                 }
                 if (cur != null && ov != null) CandidateOverlay(cur, ov)

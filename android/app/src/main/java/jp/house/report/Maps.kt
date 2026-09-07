@@ -4,6 +4,9 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.net.Uri
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -14,7 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.google.android.gms.maps.model.BitmapDescriptor
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.Dash
 import com.google.android.gms.maps.model.Gap
@@ -29,11 +34,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private fun hueOf(category: String) = when (category) {
-    "駅" -> BitmapDescriptorFactory.HUE_AZURE
-    "保育園・幼稚園" -> BitmapDescriptorFactory.HUE_ORANGE
-    "医療機関" -> BitmapDescriptorFactory.HUE_GREEN
-    else -> BitmapDescriptorFactory.HUE_VIOLET
+/** 層チップと同じ絵文字をマーカー画像にする。生成コストが高いため（絵文字・大きさ）毎に使い回す */
+private val emojiCache = mutableMapOf<String, BitmapDescriptor>()
+private fun emojiMarker(emoji: String, px: Int): BitmapDescriptor = synchronized(emojiCache) {
+    emojiCache.getOrPut("$emoji@$px") {
+        val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = px * 0.75f
+            textAlign = Paint.Align.CENTER
+            setShadowLayer(px * 0.06f, 0f, 0f, android.graphics.Color.WHITE) // 地図の上でも読めるよう白縁
+        }
+        Canvas(bmp).drawText(emoji, px / 2f, px / 2f - (paint.descent() + paint.ascent()) / 2f, paint)
+        BitmapDescriptorFactory.fromBitmap(bmp)
+    }
 }
 
 fun mapsKey(ctx: Context): String =
@@ -114,15 +127,20 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
     val here = LatLng(c.geo.lat, c.geo.lon)
     val on = ov.areasOn(c)
     val areas = c.map.areas.filter { it.label in on && it.label !in ov.wide } + on.flatMap { ov.wide[it].orEmpty() }
-    areas.forEach { a ->
+    // リングの頂点変換は数が多いため記憶し、再コンポーズ毎の作り直しを避ける（内容が同じなら再利用）
+    val polys = remember(areas) { areas.map { a -> a.ring.map { LatLng(it.first, it.second) } to a.level } }
+    polys.forEach { (pts, lv) ->
         // clickable にすると地図タップ（地点選択）を奪うので、区域の判定は areaAt で自前に行う
-        Polygon(points = a.ring.map { LatLng(it.first, it.second) }, clickable = false, fillColor = a.level.color().copy(alpha = 0.3f), strokeWidth = 0f)
+        Polygon(points = pts, clickable = false, fillColor = lv.color().copy(alpha = 0.3f), strokeWidth = 0f)
     }
-    Circle(center = here, radius = 1000.0, fillColor = Color.Transparent, strokeColor = Color(0xFF37474F), strokeWidth = 6f, strokePattern = listOf(Dash(30f), Gap(20f)))
-    c.map.pins.filter { it.category in ov.pinsOn(c) }.forEach { p ->
+    val circlePattern = remember { listOf(Dash(30f), Gap(20f)) }
+    Circle(center = here, radius = 1000.0, fillColor = Color.Transparent, strokeColor = Color(0xFF37474F), strokeWidth = 6f, strokePattern = circlePattern)
+    val pinsOn = ov.pinsOn(c)
+    val density = LocalDensity.current
+    c.map.pins.filter { it.category in pinsOn }.forEach { p ->
         key(p) {
-            Marker(state = rememberMarkerState(position = LatLng(p.lat, p.lon)), title = "${p.name}（${p.dist}m）", snippet = p.category,
-                icon = BitmapDescriptorFactory.defaultMarker(hueOf(p.category)))
+            val icon = remember(p.icon, density) { emojiMarker(p.icon, (48 * density.density).toInt()) }
+            Marker(state = rememberMarkerState(position = LatLng(p.lat, p.lon)), title = "${p.icon} ${p.name}（${p.dist}m）", snippet = p.category, icon = icon)
         }
     }
 }

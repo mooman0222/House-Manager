@@ -6,6 +6,8 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -45,6 +47,9 @@ class MainActivity : ComponentActivity() {
     private val shared = mutableStateOf<String?>(null)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        // アプリはライトテーマのためステータスバーアイコンを濃色に（Android 15 の強制エッジツーエッジ対応）
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         shared.value = sharedText(intent)
         setContent { MaterialTheme { Surface { App(shared.value) { shared.value = null } } } }
     }
