@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>おうちカルテ - 住所を入れるだけの住宅購入サポート</title>
 <meta name="description" content="住所を入力すると、災害リスク・建築条件・周辺施設・成約価格をまとめて表示するAndroidアプリ。地図表示と端末内で動くAIに対応。">
+<link rel="icon" href="favicon.ico" sizes="64x64">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-512.png">
 <style>
   :root { --bg: #faf8ff; --card: #ffffff; --ink: #1c1b1f; --sub: #49454f; --accent: #6750a4; --line: #e7e0ec; }
   * { box-sizing: border-box; }
@@ -37,16 +40,17 @@
 
 <header class="hero">
   <div>
+    <p style="margin:0 0 12px"><img src="icon-512.png" alt="おうちカルテのアプリアイコン" width="96" height="96" style="border-radius:22px"></p>
     <h1>おうちカルテ</h1>
     <p class="lead">住所を入力するだけで、災害リスク・建築条件・周辺施設・成約価格をまとめて表示。地図で比べて、端末内のAIに相談できる住宅購入サポートアプリです。</p>
     <a class="btn" href="https://github.com/mooman0222/House-Manager/releases/latest/download/house-report.apk">APKをダウンロード<br><small>Android 8.0以降対応</small></a>
   </div>
-  <div><img class="shot" src="../images/hero-map.png" alt="地図画面。区域表示と施設ピン、候補カードが見える"></div>
+  <div><img class="shot" src="images/hero-map.png" alt="地図画面。区域表示と施設ピン、候補カードが見える"></div>
 </header>
 
 <main>
   <section class="feature">
-    <div class="shot-wrap"><img class="shot" src="../images/detail-price.png" alt="価格レポート。相場比較・ヒストグラム・推移グラフ"></div>
+    <div class="shot-wrap"><img class="shot" src="images/detail-price.png" alt="価格レポート。相場比較・ヒストグラム・推移グラフ"></div>
     <div>
       <h2>調べる - 災害・建築・価格を一括調査</h2>
       <p>国土交通省 不動産情報ライブラリのデータから、洪水・土砂・液状化・用途地域・周辺施設を調査。成約価格との比較で相場比や目安価格も表示します。</p>
@@ -54,7 +58,7 @@
   </section>
 
   <section class="feature">
-    <div class="shot-wrap"><img class="shot" src="../images/compare.png" alt="候補比較表。安全・暮らし・価格などを並べて比較"></div>
+    <div class="shot-wrap"><img class="shot" src="images/compare.png" alt="候補比較表。安全・暮らし・価格などを並べて比較"></div>
     <div>
       <h2>比べる - 候補を横並びで比較</h2>
       <p>気になる物件を候補に追加して、安全・暮らし・価格の判定を一覧で比較。住所タップで地図に戻って詳細を確認できます。</p>
@@ -62,7 +66,7 @@
   </section>
 
   <section class="feature">
-    <div class="shot-wrap"><img class="shot" src="../images/ai-chat.png" alt="AIアシスタントとの会話例"></div>
+    <div class="shot-wrap"><img class="shot" src="images/ai-chat.png" alt="AIアシスタントとの会話例"></div>
     <div>
       <h2>AIに相談 - 端末内で動作</h2>
       <p>調査結果をもとに物件の比較や質問に答えます。モデルは端末に保存し、通信せずに動くのでプライバシーも安心です。</p>
@@ -71,8 +75,8 @@
 
   <section class="feature">
     <div class="shot-wrap shots-2">
-      <img class="shot" src="../images/import-progress.png" alt="物件ページ取り込み中の表示">
-      <img class="shot" src="../images/import-confirm.png" alt="取り込み内容の確認ダイアログ">
+      <img class="shot" src="images/import-progress.png" alt="物件ページ取り込み中の表示">
+      <img class="shot" src="images/import-confirm.png" alt="取り込み内容の確認ダイアログ">
     </div>
     <div>
       <h2>取り込む - 物件ページを共有するだけ</h2>
@@ -81,7 +85,7 @@
   </section>
 
   <section class="feature">
-    <div class="shot-wrap"><img class="shot" src="../images/settings-ai.png" alt="設定画面。AIモデルの選択とダウンロード"></div>
+    <div class="shot-wrap"><img class="shot" src="images/settings-ai.png" alt="設定画面。AIモデルの選択とダウンロード"></div>
     <div>
       <h2>設定 - APIキーとAIモデル</h2>
       <p>不動産情報ライブラリのAPIキー（無料申請）を入力し、端末のメモリに合ったAIモデルを選んでダウンロードします。</p>
