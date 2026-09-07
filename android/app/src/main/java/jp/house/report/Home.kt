@@ -62,7 +62,14 @@ fun HomeScreen(app: AppState) {
     val camera = rememberCameraPositionState { position = CameraPosition.fromLatLngZoom(TOKYO, 11f) }
     LaunchedEffect(cur?.geo) { cur?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
     val ov = cur?.let { rememberOverlay(it, app.reinfoKey) }
-    var adding by remember { mutableStateOf(false) }
+    // 地図タップで選んだ地点。住所が取れたらカードで確認してから候補に追加する
+    var pick by remember { mutableStateOf<LatLng?>(null) }
+    var pickAddr by remember { mutableStateOf("") }
+    LaunchedEffect(pick) {
+        pickAddr = ""
+        val ll = pick ?: return@LaunchedEffect
+        pickAddr = try { withContext(Dispatchers.IO) { reverseGeocode(ll.latitude, ll.longitude, File(ctx.cacheDir, "tiles")) } } catch (e: Exception) { "住所を取得できませんでした" }
+    }
 
     app.pendingImport?.let { inp -> ImportDialog(inp, onRun = { app.add(it); app.pendingImport = null }, onDismiss = { app.pendingImport = null }) }
 
@@ -71,7 +78,7 @@ fun HomeScreen(app: AppState) {
         sheetContent = {
             if (candidates.isEmpty()) Column(Modifier.fillMaxWidth().padding(16.dp).height(140.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("候補がありません", style = MaterialTheme.typography.titleMedium)
-                Text("上の検索バーに住所を入れるか、地図を長押しして候補を追加してください。ポータルサイトの物件ページを共有メニューから送ることもできます。", style = MaterialTheme.typography.bodySmall)
+                Text("上の検索バーに住所を入れるか、地図をタップして地点を選ぶと候補に追加できます。ポータルサイトの物件ページを共有メニューから送ることもできます。", style = MaterialTheme.typography.bodySmall)
             } else HorizontalPager(pager, Modifier.fillMaxWidth()) { page ->
                 val inp = candidates[page]
                 CandidatePage(app, inp, app.results[inp.key], app.failures[inp.key], expanded = sheet.bottomSheetState.currentValue == SheetValue.Expanded,
@@ -87,16 +94,10 @@ fun HomeScreen(app: AppState) {
                 modifier = Modifier.fillMaxSize(), cameraPositionState = camera,
                 uiSettings = MapUiSettings(zoomControlsEnabled = false, mapToolbarEnabled = false),
                 contentPadding = PaddingValues(top = 120.dp, bottom = 172.dp),
-                onMapLongClick = { ll ->
-                    if (adding || app.status.isNotEmpty()) return@GoogleMap
-                    adding = true
-                    scope.launch {
-                        try {
-                            val addr = withContext(Dispatchers.IO) { reverseGeocode(ll.latitude, ll.longitude, File(ctx.cacheDir, "tiles")) }
-                            app.add(Input(addr, kind, null, null, null))
-                        } catch (e: Exception) { app.error = "この地点の住所を取得できませんでした" } finally { adding = false }
-                    }
-                }
+                onMapClick = { ll ->
+                    if (cur != null && ov != null) ov.picked = ov.areaAt(cur, ll.latitude, ll.longitude)
+                    pick = ll
+                },
             ) {
                 candidates.forEach { inp ->
                     val c = app.results[inp.key] ?: return@forEach
@@ -107,17 +108,31 @@ fun HomeScreen(app: AppState) {
                     }
                 }
                 if (cur != null && ov != null) CandidateOverlay(cur, ov)
+                pick?.let { ll -> Marker(state = rememberMarkerState(position = ll), title = pickAddr.ifEmpty { "住所を取得中…" }, zIndex = 3f, alpha = 0.8f) }
+            }
+            // 選んだ地点の確認カード（シートの直上）
+            pick?.let {
+                Card(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp).padding(bottom = 180.dp).fillMaxWidth(), elevation = CardDefaults.cardElevation(6.dp)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("選んだ地点", style = MaterialTheme.typography.labelSmall, color = C_INFO)
+                        Text(pickAddr.ifEmpty { "住所を取得中…" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button({ app.add(Input(pickAddr, kind, null, null, null)); pick = null }, enabled = pickAddr.isNotEmpty() && "できません" !in pickAddr && app.status.isEmpty()) { Text("${kind.short}として追加して調査") }
+                            TextButton({ pick = null }) { Text("閉じる") }
+                        }
+                    }
+                }
             }
             Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 SearchBar(app, kind, { kind = it })
-                if (app.status.isNotEmpty() || adding) {
+                if (app.status.isNotEmpty()) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text(if (adding) "地点の住所を取得中…" else "調査中… ${app.status}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp))
+                    Text("調査中… ${app.status}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp))
                 }
                 if (app.error.isNotEmpty()) Text(app.error, color = C_BAD, style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp))
                 if (cur != null && ov != null) {
                     OverlayChips(cur, ov, Modifier.fillMaxWidth())
-                    ov.loadingLabel().takeIf { it.isNotEmpty() }?.let { Text("周辺の$it を読み込み中…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp)) }
+                    ov.loadingLabel(cur).takeIf { it.isNotEmpty() }?.let { Text("周辺の$it を読み込み中…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp)) }
                     ov.picked?.let { Text("${it.label}：${it.summary}", color = it.level.color(), style = MaterialTheme.typography.labelMedium, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp)) }
                 }
             }
