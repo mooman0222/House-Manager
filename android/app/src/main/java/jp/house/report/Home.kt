@@ -1,6 +1,8 @@
 package jp.house.report
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -72,6 +74,9 @@ fun HomeScreen(app: AppState) {
     }
 
     app.pendingImport?.let { inp -> ImportDialog(inp, onRun = { app.add(it); app.pendingImport = null }, onDismiss = { app.pendingImport = null }) }
+    // 戻る: 地点選択カード → シート → アプリ終了 の順に閉じる
+    BackHandler(pick != null) { pick = null }
+    BackHandler(pick == null && sheet.bottomSheetState.currentValue == SheetValue.Expanded) { scope.launch { sheet.bottomSheetState.partialExpand() } }
 
     BottomSheetScaffold(
         scaffoldState = sheet, sheetPeekHeight = 172.dp,
@@ -129,7 +134,7 @@ fun HomeScreen(app: AppState) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Text("調査中… ${app.status}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp))
                 }
-                if (app.error.isNotEmpty()) Text(app.error, color = C_BAD, style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp))
+                if (app.error.isNotEmpty()) Text("${app.error}（タップで閉じる）", color = C_BAD, style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)).padding(6.dp).clickable { app.error = "" })
                 if (cur != null && ov != null) {
                     OverlayChips(cur, ov, Modifier.fillMaxWidth())
                     ov.loadingLabel(cur).takeIf { it.isNotEmpty() }?.let { Text("周辺の$it を読み込み中…", style = MaterialTheme.typography.labelSmall, modifier = Modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)).padding(horizontal = 6.dp)) }
@@ -206,7 +211,10 @@ private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: Str
         }
         when {
             failure != null -> Column { Text(failure, color = C_BAD, style = MaterialTheme.typography.bodySmall); TextButton({ app.run(inp) }, enabled = app.status.isEmpty()) { Text("再試行") } }
-            c == null -> Column { Text(if (app.status.isNotEmpty()) "調査中… ${app.status}" else "未調査", style = MaterialTheme.typography.bodySmall); if (app.status.isEmpty()) TextButton({ app.run(inp) }) { Text("調査する") } }
+            c == null -> Column {
+                Text(when { app.runningKey == inp.key -> "調査中… ${app.status}"; app.isQueued(inp) -> "順番待ち（${app.queue.indexOfFirst { it.key == inp.key } + 1}番目）"; else -> "未調査" }, style = MaterialTheme.typography.bodySmall)
+                if (app.runningKey != inp.key && !app.isQueued(inp)) TextButton({ app.run(inp) }) { Text("調査する") }
+            }
             else -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 ScoreCircle("安全", c.safety); ScoreCircle("暮らし", c.living); ScoreCircle("価格", c.price)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

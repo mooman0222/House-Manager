@@ -1,5 +1,6 @@
 package jp.house.report
 
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -25,10 +26,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,8 +52,13 @@ class MainActivity : ComponentActivity() {
     private fun sharedText(i: Intent?) = if (i?.action == Intent.ACTION_SEND) i.getStringExtra(Intent.EXTRA_TEXT) else null
 }
 
-/** 画面をまたいで使う状態と操作。結果は候補キーで引き、調査の途中経過もここに反映される。 */
-class AppState(val ctx: Context, val scope: CoroutineScope) {
+/**
+ * 画面をまたいで使う状態と操作。ViewModel なので画面回転や一時的な再生成でも結果・進行中の調査・AI の会話を保つ。
+ * 結果は候補キーで引き、調査の途中経過もここに反映される。
+ */
+class AppState(application: Application) : AndroidViewModel(application) {
+    val ctx: Context get() = getApplication()
+    val scope: CoroutineScope get() = viewModelScope
     private val prefs = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     var key by mutableStateOf(prefs.getString("key", "") ?: "")
     fun saveKey(k: String) { key = k; prefs.edit().putString("key", k).apply() }
@@ -65,31 +77,54 @@ class AppState(val ctx: Context, val scope: CoroutineScope) {
     /** 保存済み + 調査済み（未保存）を、保存順で */
     val candidates: List<Input> get() = (saved + results.values.map { it.input }).distinctBy { it.key }
 
+    // 調査は1件ずつ。実行中は queue に並べ、終わったら次を始める。削除されたらキャンセルする
+    private var running: Pair<String, Job>? = null
+    val queue = mutableStateListOf<Input>()
+    val runningKey get() = running?.first
+    fun isQueued(inp: Input) = queue.any { it.key == inp.key }
+
     fun run(inp: Input) {
-        if (status.isNotEmpty() || results[inp.key]?.done == true) return
+        if (results[inp.key]?.done == true || isQueued(inp) || runningKey == inp.key) return
         if (key.isBlank()) { error = "設定画面で不動産情報ライブラリのAPIキーを入力してください"; tab = 3; return }
-        status = "開始"; error = ""; failures.remove(inp.key)
+        failures.remove(inp.key)
+        if (running != null) { queue += inp; return }
+        start(inp)
+    }
+    private fun start(inp: Input) {
+        status = "開始"; error = ""
         val apiKey = reinfoKey
         val fix: ((String) -> String?)? = if (Llm.ready(ctx)) { { a -> runCatching { Llm.normalizeAddress(ctx, a) }.getOrNull() } } else null
-        scope.launch {
+        val job = scope.launch {
             try {
-                val c = withContext(Dispatchers.IO) {
-                    analyze(inp, apiKey, File(ctx.cacheDir, "tiles"), fix, partial = { results[inp.key] = it }) { p -> status = p }
+                // runInterruptible: キャンセル時にスレッドを割り込み、httpJson の待機で抜ける
+                val c = runInterruptible(Dispatchers.IO) {
+                    analyze(inp, apiKey, File(ctx.cacheDir, "tiles"), fix, partial = { if (isActive) results[inp.key] = it }) { p -> if (isActive) status = p }
                 }
-                results[inp.key] = c
+                if (isActive) results[inp.key] = c
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 results.remove(inp.key)
                 error = "調査に失敗しました（${e.message?.take(60) ?: e.javaClass.simpleName}）。住所・通信環境・APIキーをご確認ください。"
                 failures[inp.key] = error
-            } finally { status = "" }
+            } finally {
+                running = null; status = ""
+                queue.removeFirstOrNull()?.let { start(it) }
+            }
         }
+        running = inp.key to job
     }
     /** 候補を追加して調査し、シートで開く */
     fun add(inp: Input) { if (saved.none { it.key == inp.key }) { saved = saved + inp; storeSaved() }; selected = inp.key; tab = 0; run(inp) }
     fun toggleSave(inp: Input) { saved = if (saved.any { it.key == inp.key }) saved.filter { it.key != inp.key } else saved + inp; storeSaved() }
-    fun remove(inp: Input) { saved = saved.filter { it.key != inp.key }; storeSaved(); results.remove(inp.key); failures.remove(inp.key); if (selected == inp.key) selected = null }
+    fun remove(inp: Input) {
+        if (runningKey == inp.key) running?.second?.cancel() // finally で次の候補が始まる
+        queue.removeAll { it.key == inp.key }
+        saved = saved.filter { it.key != inp.key }; storeSaved(); results.remove(inp.key); failures.remove(inp.key)
+        if (selected == inp.key) selected = null
+    }
     fun isSaved(inp: Input) = saved.any { it.key == inp.key }
+    /** キャッシュ削除。調査中は拒否 */
+    fun clearCache(): Boolean { if (running != null) return false; File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear(); return true }
     private fun loadSaved(): List<Input> { val f = File(ctx.filesDir, "candidates.json"); if (!f.exists()) return emptyList(); val a = JSONArray(f.readText()); return (0 until a.length()).map { Input.from(a.getJSONObject(it)) } }
     private fun storeSaved() = File(ctx.filesDir, "candidates.json").writeText(JSONArray(saved.map { it.toJson() }).toString())
 
@@ -103,8 +138,8 @@ class AppState(val ctx: Context, val scope: CoroutineScope) {
         checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
     }
 
-    // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら次の発言から作り直す
-    val chat = ChatState()
+    // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら（生成が終わってから）作り直す
+    val chat = ChatState(scope)
 
     // AIモデルのダウンロード。-1 は停止中
     var dlBytes by mutableStateOf(-1L)
@@ -120,15 +155,18 @@ class AppState(val ctx: Context, val scope: CoroutineScope) {
             finally { dlBytes = -1 }
         }
     }
-    fun deleteModel() { Llm.delete(ctx); modelReady = false }
+    /** AI が使用中（生成・住所補正）なら削除しない */
+    val aiInUse get() = chat.busy.isNotEmpty() || Llm.busy
+    fun deleteModel(): Boolean { if (aiInUse || !Llm.delete(ctx)) return false; modelReady = false; chat.close(); return true }
+
+    override fun onCleared() { chat.close() }
 }
 
 @Composable
 fun App(sharedText: String?, onSharedHandled: () -> Unit) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val app = remember { AppState(ctx, scope) }
-    LaunchedEffect(app.results.keys.toSet()) { if (app.chat.busy.isEmpty()) app.chat.close() }
+    val app: AppState = viewModel()
+    LaunchedEffect(app.results.keys.toSet()) { app.chat.invalidate() }
     LaunchedEffect(sharedText) { if (sharedText != null) { app.tab = 0; app.pendingImport = importListing(ctx, sharedText); onSharedHandled() } }
 
     Scaffold(bottomBar = {
@@ -184,12 +222,12 @@ fun ItemRow(it: Item) {
 fun SettingsScreen(app: AppState) {
     var confirmDelete by remember { mutableStateOf(false) }
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("AIモデルを削除") }, text = { Text("約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルファイルを端末から削除します。AI機能は再ダウンロードまで使えません。") },
-        confirmButton = { TextButton({ app.deleteModel(); confirmDelete = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("キャンセル") } })
+        confirmButton = { TextButton({ if (!app.deleteModel()) app.dlError = "AIが使用中のため削除できません。生成や調査が終わってからお試しください。"; confirmDelete = false }) { Text("削除") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("キャンセル") } })
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("設定", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(app.key, { app.saveKey(it) }, Modifier.fillMaxWidth(), label = { Text("不動産情報ライブラリ APIキー") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
         Text("APIキーはこの端末の中にだけ保存されます。キーは国土交通省 不動産情報ライブラリ（reinfolib.mlit.go.jp）で個人でも無料で申請できます。", style = MaterialTheme.typography.bodySmall)
-        OutlinedButton({ File(app.ctx.cacheDir, "tiles").deleteRecursively(); app.results.clear() }) { Text("取得データのキャッシュを削除") }
+        OutlinedButton({ app.clearCache() }, enabled = app.status.isEmpty()) { Text(if (app.status.isEmpty()) "取得データのキャッシュを削除" else "調査中はキャッシュを削除できません") }
         HorizontalDivider()
         Text("物件ページの取り込み", style = MaterialTheme.typography.titleMedium)
         Text("ブラウザやポータルアプリの共有メニューから「物件レポート」を選ぶと、住所・価格・面積・築年を読み取って候補に追加できます。", style = MaterialTheme.typography.bodySmall)
@@ -197,7 +235,7 @@ fun SettingsScreen(app: AppState) {
         Text("AIアシスタント（Gemma 4 E2B・端末内で動作）", style = MaterialTheme.typography.titleMedium)
         Text("物件の比較・質問への回答、住所表記の補正、物件ページからの情報抽出に使います。約${Llm.MODEL_BYTES / 100_000_000 / 10.0}GBのモデルを端末に保存し、通信せずに動きます。メモリの少ない端末では動かない、または非常に遅いことがあります。", style = MaterialTheme.typography.bodySmall)
         when {
-            app.modelReady -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("導入済み"); OutlinedButton({ confirmDelete = true }) { Text("モデルを削除") } }
+            app.modelReady -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { Text(if (app.aiInUse) "導入済み（使用中）" else "導入済み"); OutlinedButton({ confirmDelete = true }, enabled = !app.aiInUse) { Text("モデルを削除") } }
             app.dlBytes >= 0 -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("ダウンロード中… %d / %d MB".format(app.dlBytes / 1_000_000, Llm.MODEL_BYTES / 1_000_000), style = MaterialTheme.typography.bodySmall)
                 LinearProgressIndicator({ (app.dlBytes.toFloat() / Llm.MODEL_BYTES).coerceIn(0f, 1f) }, Modifier.fillMaxWidth())

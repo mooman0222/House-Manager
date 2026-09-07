@@ -17,6 +17,7 @@ fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
 /** GET → JSON (Object/Array). cache 指定時はファイルキャッシュし、取得後に待機。 */
 fun httpJson(url: String, key: String? = null, cache: File? = null): Any {
+    if (Thread.interrupted()) throw InterruptedException() // 調査のキャンセル（runInterruptible）に応じる
     cache?.takeIf { it.exists() }?.let { return parse(it.readText()) }
     val c = URL(url).openConnection() as HttpURLConnection
     c.connectTimeout = 30_000; c.readTimeout = 30_000

@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.litertlm.Conversation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -33,13 +34,17 @@ fun String.stripMd(): String = replace(Regex("\\*\\*|__|`"), "")
     .replace(Regex("(?m)^#{1,6}\\s*"), "")
     .replace(Regex("(?m)^\\s*[-*]\\s+"), "・")
 
-/** 1つの会話の状態。画面から切り離して持ち、タブを切り替えても続くようにする。 */
-class ChatState {
+/** 1つの会話の状態。画面から切り離して持ち、生成はアプリのスコープで回すのでタブを離れても続く。 */
+class ChatState(val scope: CoroutineScope) {
     val log = mutableStateListOf<Pair<Boolean, String>>() // (ユーザー発言か, 本文)
     var busy by mutableStateOf("")
     var error by mutableStateOf("")
     var conv: Conversation? = null
+    /** 生成中に調査結果が増えた。生成が終わったら会話を作り直す */
+    var stale = false
     fun close() { conv?.let { it.cancelProcess(); it.close() }; conv = null }
+    /** 結果が変わった時に呼ぶ。生成中なら終わってから作り直す */
+    fun invalidate() { if (busy.isEmpty()) close() else stale = true }
 }
 
 @Composable
@@ -53,7 +58,6 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
         return
     }
     var input by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
     val log = state.log
     LaunchedEffect(log.size, log.lastOrNull()?.second?.length) { if (log.isNotEmpty()) list.animateScrollToItem(log.size - 1) }
@@ -61,19 +65,25 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
     fun send(q: String) {
         if (state.busy.isNotEmpty() || q.isBlank()) return
         log += true to q; log += false to ""; input = ""; state.error = ""
-        scope.launch {
+        state.scope.launch {
             try {
-                state.busy = if (state.conv == null) "モデルを読み込み中…" else "考え中…"
-                val cv = state.conv ?: withContext(Dispatchers.IO) { makeConv(ctx) }.also { state.conv = it }
-                state.busy = "考え中…"
+                state.busy = if (Llm.busy) "AIの空き待ち…" else if (state.conv == null) "モデルを読み込み中…" else "考え中…"
                 withContext(Dispatchers.IO) {
-                    cv.sendMessageAsync(q).collect { m -> log[log.lastIndex] = false to log.last().second + m.text } // 差分が届く
+                    Llm.gate.acquire() // 住所補正など他の推論と並走させない
+                    try {
+                        val cv = state.conv ?: makeConv(ctx).also { state.conv = it }
+                        state.busy = "考え中…"
+                        cv.sendMessageAsync(q).collect { m -> log[log.lastIndex] = false to log.last().second + m.text } // 差分が届く
+                    } finally { Llm.gate.release() }
                 }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 state.error = "生成に失敗しました: ${e.message?.take(120) ?: e.javaClass.simpleName}"
                 if (log.lastOrNull()?.second.isNullOrEmpty()) log.removeAt(log.lastIndex)
-            } finally { state.busy = "" }
+            } finally {
+                state.busy = ""
+                if (state.stale) { state.stale = false; state.close() }
+            }
         }
     }
 

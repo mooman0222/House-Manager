@@ -42,7 +42,16 @@ object Llm {
         if (!part.renameTo(dst)) throw ApiError("保存に失敗")
     }
 
-    @Synchronized fun delete(ctx: Context) { engine?.close(); engine = null; file(ctx).delete(); File(file(ctx).path + ".part").delete() }
+    /** 使用中なら削除しない（false を返す） */
+    @Synchronized fun delete(ctx: Context): Boolean {
+        if (!gate.tryAcquire()) return false
+        try { engine?.close(); engine = null; file(ctx).delete(); File(file(ctx).path + ".part").delete() } finally { gate.release() }
+        return true
+    }
+
+    /** 推論の排他。1つのエンジンで会話生成と住所補正が並走しないようにする。ブロッキング呼び出しからも使えるよう Semaphore */
+    val gate = java.util.concurrent.Semaphore(1, true)
+    val busy get() = gate.availablePermits() == 0
 
     private var engine: Engine? = null
     /** 初回は読み込みに10秒以上かかる。IO スレッドで呼ぶ。プロセス生存中は使い回す。 */
@@ -55,8 +64,13 @@ object Llm {
     )
 
     /** 曖昧な住所を正式表記に直す。直せなければ null。 */
-    fun normalizeAddress(ctx: Context, raw: String): String? = chat(ctx, NORMALIZE, temperature = 0.1).use { conv ->
-        conv.sendMessage(raw).text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it != raw }
+    fun normalizeAddress(ctx: Context, raw: String): String? {
+        gate.acquire() // 会話生成中なら終わるまで待つ（キャンセルは InterruptedException で抜ける）
+        try {
+            return chat(ctx, NORMALIZE, temperature = 0.1).use { conv ->
+                conv.sendMessage(raw).text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it != raw }
+            }
+        } finally { gate.release() }
     }
 
     private const val NORMALIZE = "入力された日本の住所を「都道府県 市区町村 町名 丁目 番地」の正式な表記に直し、住所だけを1行で出力してください。例: 東京都千代田区丸の内1丁目1-1。説明や前置きは書かないでください。"
