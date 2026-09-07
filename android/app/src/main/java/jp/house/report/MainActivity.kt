@@ -260,9 +260,32 @@ fun PriceTab(c: Candidate) {
         Text("地区の㎡単価の推移（四半期中央値・5年）", style = MaterialTheme.typography.titleMedium)
         LineChart(p.trend, "万円")
     } }
-    Card { Column(Modifier.padding(12.dp)) {
-        Text("直近の成約例（地区単位）", style = MaterialTheme.typography.titleMedium)
-        p.recent.forEach { Text("・$it", style = MaterialTheme.typography.bodySmall) }
+    DealList(p)
+}
+
+/** 周辺の成約・取引を1件ずつ。町丁目での絞り込みと段階表示。 */
+@Composable
+fun DealList(p: Prices) {
+    val hasDistrict = p.deals.any { it.sameDistrict }
+    var onlyDistrict by remember(p) { mutableStateOf(hasDistrict) }
+    var shown by remember(p) { mutableStateOf(20) }
+    val list = if (onlyDistrict) p.deals.filter { it.sameDistrict } else p.deals
+    Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("周辺の成約・取引 ${list.size}件（新しい順・5年分）", style = MaterialTheme.typography.titleMedium)
+        Text("位置は町丁目単位までしか公開されていません。成約は不動産流通機構、取引はアンケートに基づく価格です。", style = MaterialTheme.typography.labelSmall)
+        if (hasDistrict) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(onlyDistrict, { onlyDistrict = true; shown = 20 }, { Text("同じ町丁目") })
+            FilterChip(!onlyDistrict, { onlyDistrict = false; shown = 20 }, { Text("周辺約3km") })
+        }
+        list.take(shown).forEach { d ->
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("${d.district} ${d.time} ${d.category}", style = MaterialTheme.typography.labelMedium)
+                Text("${d.price}（%.1f万円/㎡）".format(d.unit / 1e4), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            }
+            Text(d.spec, style = MaterialTheme.typography.bodySmall)
+        }
+        if (shown < list.size) TextButton({ shown += 20 }) { Text("さらに20件表示（残り${list.size - shown}件）") }
     } }
 }
 

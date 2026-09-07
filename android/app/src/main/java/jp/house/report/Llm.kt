@@ -73,6 +73,7 @@ fun Candidate.digest(): String = buildString {
         appendLine("■${p.scope}の成約（直近2年 ${p.units.size}件）: ㎡単価中央値 %.1f万円、条件の近い${p.nSimilar}件の中央値 %.1f万円".format(p.median / 1e4, p.simMedian / 1e4))
         p.myUnit?.let { appendLine("- この物件の㎡単価 %.1f万円（近い条件の中央値比 %+.0f%%）".format(it / 1e4, (it / p.simMedian - 1) * 100)) }
         p.range?.let { (lo, hi) -> appendLine("- 目安価格 %,.0f〜%,.0f万円".format(lo, hi)) }
+        p.deals.take(8).forEach { appendLine("- ${it.district} ${it.time} ${it.category} ${it.price} ${it.spec}") }
     }
     pop?.takeIf { it.values.size >= 2 }?.let { appendLine("■将来推計人口（周辺250mメッシュ）: ${it.labels.first()}年 ${it.values.first().toInt()}人 → ${it.labels.last()}年 ${it.values.last().toInt()}人") }
 }
