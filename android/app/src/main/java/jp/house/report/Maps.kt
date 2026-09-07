@@ -69,7 +69,8 @@ fun MapTab(c: Candidate, reinfoKey: String, modifier: Modifier = Modifier) {
     }
     val here = LatLng(c.geo.lat, c.geo.lon)
     val camera = rememberCameraPositionState { position = CameraPosition.fromLatLngZoom(here, 14f) }
-    val areaLabels = remember(c) { c.map.areas.map { it.label }.distinct() }
+    // 全区画を描く層（液状化）は物件が区画外でも周辺を見られるようにチップを常に出す
+    val areaLabels = remember(c) { (c.map.areas.map { it.label } + POLY_LAYERS.filter { it.all }.map { it.label }).distinct() }
     val pinCats = remember(c) { c.map.pins.map { it.category }.distinct() }
     var onAreas by remember(c) { mutableStateOf(c.map.areas.filter { it.level != Level.INFO }.map { it.label }.distinct().toSet()) }
     var onPins by remember(c) { mutableStateOf(pinCats.toSet()) }
@@ -99,7 +100,7 @@ fun MapTab(c: Candidate, reinfoKey: String, modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically
         ) {
             areaLabels.forEach { l ->
-                val lv = c.map.areas.first { it.label == l }.level
+                val lv = c.map.areas.firstOrNull { it.label == l }?.level ?: Level.INFO
                 FilterChip(l in onAreas, { onAreas = if (l in onAreas) onAreas - l else onAreas + l }, { Text(l) }, leadingIcon = { Dot(lv) })
             }
             pinCats.forEach { cat ->
@@ -121,8 +122,8 @@ fun MapTab(c: Candidate, reinfoKey: String, modifier: Modifier = Modifier) {
                     Polygon(
                         points = a.ring.map { LatLng(it.first, it.second) },
                         clickable = true, onClick = { picked = a },
-                        fillColor = a.level.color().copy(alpha = 0.22f),
-                        strokeColor = a.level.color(), strokeWidth = 3f
+                        fillColor = a.level.color().copy(alpha = 0.3f),
+                        strokeWidth = 0f // 枠線は隣接メッシュで格子になって邪魔なので描かない
                     )
                 }
                 Circle(
@@ -147,7 +148,7 @@ fun MapTab(c: Candidate, reinfoKey: String, modifier: Modifier = Modifier) {
         }
         Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             picked?.let { Text("${it.label}：${it.summary}", style = MaterialTheme.typography.bodySmall, color = it.level.color()) }
-            Text("色の付いた範囲は判定に使った区域で、物件の周囲約3km分を表示しています。破線の円は半径1kmです。区域やマーカーをタップすると内容が出ます。", style = MaterialTheme.typography.labelSmall)
+            Text("色の付いた範囲は判定に使った区域で、物件の周囲約3km分を表示しています。液状化傾向は周辺全体を各区画の判定色で示します。破線の円は半径1kmです。区域やマーカーをタップすると内容が出ます。", style = MaterialTheme.typography.labelSmall)
             OutlinedButton({ openStreetView(ctx, c.geo.lat, c.geo.lon) }) { Text("ストリートビューで周辺を見る") }
         }
     }

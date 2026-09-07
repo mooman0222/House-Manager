@@ -56,15 +56,17 @@ private val FLOOD = mapOf(1 to "0.5m未満", 2 to "0.5〜3m", 3 to "3〜5m", 4 t
 private val PHEN = mapOf(1 to "急傾斜地の崩壊", 2 to "土石流", 3 to "地滑り")
 private fun depth(txt: String): Pair<Level, String> { val d = Regex("\\d+(\\.\\d+)?").find(txt)?.value?.toDouble() ?: 0.0; return (if (d >= 3) Level.BAD else Level.WARN) to "$txt の浸水想定" }
 
-/** wide=false は 250m メッシュなど、タイル境界で切れても誤解を生まない層。地図では周辺を広げない。 */
-class PolyLayer(val icon: String, val label: String, val api: String, val none: String = "該当なし", val noneLevel: Level = Level.OK, val detail: String = "", val wide: Boolean = true, val f: (JSONObject) -> Pair<Level, String>)
+/**
+ * wide: 地図で周辺8タイルも取得する。all: 物件と同じ区分だけでなく全区画を各自の判定色で描く（液状化のようなメッシュ層をハザードマップとして見せる）。
+ */
+class PolyLayer(val icon: String, val label: String, val api: String, val none: String = "該当なし", val noneLevel: Level = Level.OK, val detail: String = "", val wide: Boolean = true, val all: Boolean = false, val f: (JSONObject) -> Pair<Level, String>)
 
 val HAZARD_LAYERS = listOf(
     PolyLayer("🌊", "洪水浸水", "XKT026", detail = "想定最大規模降雨での浸水深。3m以上は2階も浸水する目安") { val r = it.optInt("A31a_205"); (if (r >= 3) Level.BAD else Level.WARN) to "${FLOOD[r] ?: "ランク$r"}（${it.s("A31a_202")}）" },
     PolyLayer("🌊", "高潮浸水", "XKT027") { depth(it.s("A49_003")) },
     PolyLayer("🌊", "津波浸水", "XKT028") { depth(it.s("A40_003")) },
     PolyLayer("⛰️", "土砂災害", "XKT029", detail = "特別警戒区域(レッドゾーン)は建築制限あり") { val sp = it.optInt("A33_002") == 2; (if (sp) Level.BAD else Level.WARN) to "${if (sp) "特別警戒区域" else "警戒区域"}（${PHEN[it.optInt("A33_001")] ?: ""}）" },
-    PolyLayer("〰️", "液状化傾向", "XKT025", none = "データなし", noneLevel = Level.INFO, detail = "地形区分に基づく傾向。個別のボーリング調査に代わるものではない", wide = false) { val l = it.optInt("liquefaction_tendency_level"); (if (l <= 2) Level.BAD else if (l == 3) Level.WARN else Level.OK) to "${it.s("note")}（${it.s("topographic_classification_name_ja")}）" },
+    PolyLayer("〰️", "液状化傾向", "XKT025", none = "データなし", noneLevel = Level.INFO, detail = "地形区分に基づく傾向。個別のボーリング調査に代わるものではない", all = true) { val l = it.optInt("liquefaction_tendency_level"); (if (l <= 2) Level.BAD else if (l == 3) Level.WARN else Level.OK) to "${it.s("note")}（${it.s("topographic_classification_name_ja")}）" },
     PolyLayer("🏗️", "大規模盛土", "XKT020", detail = "地震時に滑動崩落の恐れがある造成地") { Level.WARN to "盛土造成地（${it.s("embankment_classification")}）" },
     PolyLayer("⚠️", "災害危険区域", "XKT016") { Level.WARN to "指定区域内" },
     PolyLayer("⛰️", "急傾斜地", "XKT022") { Level.WARN to "崩壊危険区域内" },
@@ -86,10 +88,10 @@ val LIVING_LAYERS = listOf(
 
 val POLY_LAYERS = HAZARD_LAYERS + BUILDING_LAYERS + LIVING_LAYERS
 
-/** 地図用に周辺8タイルまで広げ、keep と同じ区域の断片だけを拾う。タイル境界で区域が切れて見えるのを防ぐ。 */
+/** 地図用に周辺8タイルまで広げ、keep と同じ区域の断片だけを拾う（all の層は全区画）。タイル境界で区域が切れて見えるのを防ぐ。 */
 fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> = lib.tiles(l.api, 15, 1).flatMap { ft ->
     val (lv, summary) = l.f(ft.getJSONObject("properties"))
-    if (summary !in keep) emptyList()
+    if (!l.all && summary !in keep) emptyList()
     else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
 }
 
