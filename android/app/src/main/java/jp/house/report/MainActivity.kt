@@ -327,7 +327,13 @@ fun SettingsScreen(app: AppState) {
         }
         if (app.dlError.isNotEmpty()) Text(app.dlError, color = C_BAD, style = MaterialTheme.typography.bodySmall)
         Text(DISCLAIMER, style = MaterialTheme.typography.labelSmall)
+        Text(SOURCES, style = MaterialTheme.typography.labelSmall)
     }
 }
 
 const val DISCLAIMER = "このサービスは、国土交通省の不動産情報ライブラリのAPI機能を使用していますが、提供情報の最新性、正確性、完全性等が保証されたものではありません"
+
+/** 利用規約（PDL1.0・API利用規約第7条・第8条）に沿った出典・責任表示。設定画面に表示する */
+const val SOURCES = "出典：国土交通省 不動産情報ライブラリ（https://www.reinfolib.mlit.go.jp/）の情報をもとに作成\n" +
+        "原典：国土数値情報・都市計画決定GISデータ・液状化の発生傾向図等（国土交通省）、住所検索（国土地理院）\n" +
+        "本アプリの集計・判定は上記データを編集・加工したもので、国が作成したものではありません。本アプリは個人開発のもので、国土交通省とは関係ありません。参考情報としてご利用ください（重要事項説明や建築確認等の手続に用いることはできません）"
