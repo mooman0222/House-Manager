@@ -4,14 +4,25 @@
 usage: REINFOLIB_API_KEY=... python3 report.py "東京都文京区本郷7-3-1" --type mansion [--price 6800 --area 65 --built 2010]
        (.env に REINFOLIB_API_KEY=... を書いてもよい)
 """
-import argparse, datetime, gzip, json, math, os, re, statistics, sys, time, urllib.parse, urllib.request
+import argparse, datetime, gzip, json, math, os, re, statistics, sys, time, threading, urllib.parse, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 BASE = "https://www.reinfolib.mlit.go.jp/ex-api/external/"
 CACHE = Path(__file__).parent / ".cache"
 LAND_TYPE = {"mansion": "07", "house": "02", "land": "01"}
 LAND_LABEL = {"mansion": "中古マンション等", "house": "宅地(土地と建物)", "land": "宅地(土地)"}
-WAIT = 0.5  # ponytail: 制限値が非公開なので固定待機。429 が出たら指数バックオフに
+GAP = 0.35  # 不動産情報ライブラリQ&A Q.3「間隔を空けて」対応の最低開始間隔。MCP並のバースト並列は避ける
+_lock = threading.Lock()
+_last_start = [0.0]
+
+
+def _wait_turn():
+    with _lock:
+        wait = _last_start[0] + GAP - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_start[0] = time.monotonic()
 
 
 def api_key():
@@ -25,27 +36,36 @@ def api_key():
     return k
 
 
-def http_json(url, headers=None, cache_key=None):
+def http_json(url, headers=None, cache_key=None, retries=3):
     if cache_key:
         f = CACHE / (re.sub(r"[^\w.-]", "_", cache_key) + ".json")
         if f.exists():
             return json.loads(f.read_text())
-    req = urllib.request.Request(url, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            body = r.read()
-            if r.headers.get("Content-Encoding") == "gzip" or body[:2] == b"\x1f\x8b":
-                body = gzip.decompress(body)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            body = b'{"type":"FeatureCollection","features":[]}'
-        else:
-            sys.exit(f"HTTP {e.code} {url}\n{e.read()[:300]}")
+    attempt = 0
+    while True:
+        _wait_turn()
+        req = urllib.request.Request(url, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                body = r.read()
+                if r.headers.get("Content-Encoding") == "gzip" or body[:2] == b"\x1f\x8b":
+                    body = gzip.decompress(body)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                body = b'{"type":"FeatureCollection","features":[]}'
+            elif e.code == 429 or 500 <= e.code <= 599:
+                if attempt >= retries:
+                    sys.exit(f"HTTP {e.code} {url} (再試行上限)")
+                attempt += 1
+                time.sleep(2 ** attempt)  # 2s, 4s, 8s
+                continue
+            else:
+                sys.exit(f"HTTP {e.code} {url}\n{e.read()[:300]}")
+        break
     data = json.loads(body)
     if cache_key:
         CACHE.mkdir(exist_ok=True)
         f.write_text(json.dumps(data, ensure_ascii=False))
-        time.sleep(WAIT)
     return data
 
 
@@ -63,6 +83,19 @@ def tile(lat, lon, z):
     x = int((lon + 180) / 360 * n)
     y = int((1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n)
     return x, y
+
+
+def cover_tiles(lat, lon, z, radius_m):
+    """半径radius_mの円を覆うタイル列挙。中心＋はみ出す隣接のみ (最大3x3)。around=1固定(9枚)の削減用。"""
+    if radius_m <= 0:
+        return [tile(lat, lon, z)]
+    d_lat = radius_m / 111320.0
+    d_lon = radius_m / (111320.0 * max(math.cos(math.radians(lat)), 0.2))
+    x1, y1 = tile(max(-85.0, min(85.0, lat - d_lat)), lon - d_lon, z)
+    x2, y2 = tile(max(-85.0, min(85.0, lat + d_lat)), lon + d_lon, z)
+    xs = range(min(x1, x2), min(max(x1, x2), min(x1, x2) + 2) + 1)
+    ys = range(min(y1, y2), min(max(y1, y2), min(y1, y2) + 2) + 1)
+    return [(x, y) for x in xs for y in ys]
 
 
 def dist_m(lat1, lon1, lat2, lon2):
@@ -109,22 +142,93 @@ class Lib:
         self.h = {"Ocp-Apim-Subscription-Key": key}
         self.lat, self.lon = lat, lon
 
+    def _url(self, api, z, x, y, params):
+        q = dict(response_format="geojson", z=z, x=x, y=y, **params)
+        qs = urllib.parse.urlencode(q)
+        return BASE + api + "?" + qs, api + "_" + qs
+
+    def multi(self, reqs):
+        """複数APIのまとめ取得 (MCP get_multi_api相当の自前版)。
+
+        reqs: [(api, z, tiles|None, params)] の列。tilesがNoneなら中心1タイル、
+        cover_radius_mを使う場合は ("cover", radius) 形式で渡す (下のhere_all/near_all参照)。
+        同一URLは1回に束ね、キャッシュ済みは通信せず、未取得分だけ最大3並列で取得する。
+        """
+        jobs = {}  # url -> (api, cache_key)
+        order = []  # (req_idx, url)
+        norm = []
+        for api, z, how, params in reqs:
+            if isinstance(how, tuple) and how and how[0] == "cover":
+                tiles = cover_tiles(self.lat, self.lon, z, how[1])
+            elif how is None:
+                tiles = [tile(self.lat, self.lon, z)]
+            else:
+                x0, y0 = tile(self.lat, self.lon, z)
+                tiles = [(x0 + dx, y0 + dy) for dx in range(-how, how + 1) for dy in range(-how, how + 1)]
+            norm.append((api, z, tiles, params))
+            for x, y in tiles:
+                url, ck = self._url(api, z, x, y, params)
+                if url not in jobs:
+                    jobs[url] = (api, ck)
+                order.append((len(norm) - 1, url))
+        feats_by_url = {}
+        missing = [(u, ck) for u, (_, ck) in jobs.items()
+                   if not (CACHE / (re.sub(r"[^\w.-]", "_", ck) + ".json")).exists()]
+        if missing:
+            def fetch(pair):
+                u, ck = pair
+                return u, http_json(u, self.h, cache_key=ck).get("features") or []
+            with ThreadPoolExecutor(max_workers=min(3, len(missing))) as ex:
+                for u, feats in ex.map(fetch, missing):
+                    feats_by_url[u] = feats
+        for u, (_, ck) in jobs.items():
+            if u not in feats_by_url:
+                f = CACHE / (re.sub(r"[^\w.-]", "_", ck) + ".json")
+                feats_by_url[u] = json.loads(f.read_text()).get("features") or [] if f.exists() else []
+        grouped = [[] for _ in norm]
+        seen_per_req = [set() for _ in norm]
+        for idx, u in order:
+            for f in feats_by_url.get(u) or []:
+                # タイル境界をまたぐ同一図形の重複収録を束ねる (属性が違えば別件として残る)
+                sig = json.dumps(f, sort_keys=True, ensure_ascii=False)
+                if sig not in seen_per_req[idx]:
+                    seen_per_req[idx].add(sig)
+                    grouped[idx].append(f)
+        return grouped
+
     def tiles(self, api, z, around=0, **params):
-        x0, y0 = tile(self.lat, self.lon, z)
-        feats = []
-        for dx in range(-around, around + 1):
-            for dy in range(-around, around + 1):
-                q = dict(response_format="geojson", z=z, x=x0 + dx, y=y0 + dy, **params)
-                url = BASE + api + "?" + urllib.parse.urlencode(q)
-                feats += http_json(url, self.h, cache_key=api + "_" + urllib.parse.urlencode(q)).get("features") or []
-        return feats
+        return self.multi([(api, z, around, params)])[0]
+
+    def here_all(self, apis, z=15):
+        """点包含の一括版。リクエスト数はAPI数と同じ (各1タイル) だが並列で壁時間を短縮。"""
+        grouped = self.multi([(a, z, None, {}) for a in apis])
+        return {a: [f["properties"] for f in feats if contains(f["geometry"], self.lon, self.lat)]
+                for a, feats in zip(apis, grouped)}
 
     def here(self, api, z=15):
-        return [f["properties"] for f in self.tiles(api, z) if contains(f["geometry"], self.lon, self.lat)]
+        return self.here_all([api], z)[api]
+
+    def near_all(self, specs):
+        """近傍点の一括版。z14＋半径カバーで従来 z15×9枚×N を削減する。specs: [(api, radius, params)]"""
+        grouped = self.multi([(a, 14, ("cover", r), p) for a, r, p in specs])
+        out = {}
+        for (a, r, _), feats in zip(specs, grouped):
+            items = []
+            for f in feats:
+                la, lo = point_of(f["geometry"])
+                d = dist_m(self.lat, self.lon, la, lo)
+                if d <= r:
+                    items.append((round(d), f["properties"]))
+            out[a] = sorted(items, key=lambda t: t[0])
+        return out
 
     def near(self, api, z=15, radius=1000, **params):
+        if z == 15 and "around" not in params:
+            # 旧呼び出し (z15周辺9枚) は z14カバーに寄せる
+            return self.near_all([(api, radius, params)])[api]
+        around = params.pop("around", 1)
         out = []
-        for f in self.tiles(api, z, around=1, **params):
+        for f in self.tiles(api, z, around=around, **params):
             la, lo = point_of(f["geometry"])
             d = dist_m(self.lat, self.lon, la, lo)
             if d <= radius:
@@ -165,8 +269,10 @@ def main():
     P(f"# {a.address}\n\n- ジオコーディング: {title} ({lat:.5f}, {lon:.5f})\n- 種別: {LAND_LABEL[a.type]}\n")
 
     P("## 災害リスク")
+    _here = L.here_all(["XKT026", "XKT027", "XKT028", "XKT029", "XKT025", "XKT020", "XKT016", "XKT022", "XKT021",
+                        "XKT002", "XKT014", "XKT023", "XKT004", "XKT005", "XKT013"])
     def hazard(label, api, fmt, z=15):
-        hits = L.here(api, z)
+        hits = _here.get(api, [])
         P(f"- {label}: " + (" / ".join(sorted({fmt(p) for p in hits})) if hits else "該当なし"))
     hazard("洪水浸水想定(最大規模)", "XKT026", lambda p: f"{p.get('A31a_202')} 浸水深ランク{p.get('A31a_205')}")
     hazard("高潮浸水想定", "XKT027", lambda p: str(p.get("A49_003")))
@@ -189,7 +295,8 @@ def main():
     P("\n## 生活環境")
     hazard("小学校区", "XKT004", lambda p: str(p.get("A27_004_ja")))
     hazard("中学校区", "XKT005", lambda p: str(p.get("A32_004_ja")))
-    st = L.near("XKT015", radius=1500)
+    _near = L.near_all([("XKT015", 1500, {}), ("XKT007", 1000, {}), ("XKT010", 1000, {}), ("XKT017", 1000, {})])
+    st = _near.get("XKT015", [])
     seen, rows = set(), []
     for d, p in st:
         if p.get("S12_001_ja") in seen:
@@ -199,9 +306,9 @@ def main():
         rows.append(f"{p.get('S12_001_ja')}({p.get('S12_003_ja')}) {d}m 乗降{pax:,}人/日" if isinstance(pax, int) else f"{p.get('S12_001_ja')}({p.get('S12_003_ja')}) {d}m")
     P("- 駅(1.5km以内): " + (" / ".join(rows[:4]) if rows else "なし"))
     for label, api, name in [("保育園・幼稚園", "XKT007", "preSchoolName_ja"), ("医療機関", "XKT010", "P04_002_ja"), ("図書館", "XKT017", "P27_005_ja")]:
-        fs = L.near(api)
+        fs = _near.get(api, [])
         P(f"- {label}(1km以内): {len(fs)}件" + (" 最寄 " + ", ".join(f"{p.get(name)} {d}m" for d, p in fs[:3]) if fs else ""))
-    pop = L.here("XKT013")
+    pop = _here.get("XKT013", [])
     if pop:
         p = pop[0]
         yrs = sorted(k for k in p if re.fullmatch(r"PTN_\d{4}", k))
@@ -214,7 +321,8 @@ def main():
 
     P("\n## 価格の目安 (近隣1km・直近8四半期・" + LAND_LABEL[a.type] + ")")
     frm, to = quarters_back(8)
-    deals = L.near("XPT001", **{"from": frm, "to": to, "landTypeCode": LAND_TYPE[a.type]})
+    # XPT001は代表点集約のため距離絞り込み不可。z14カバー(1〜4枚)で取得する
+    deals = L.near_all([("XPT001", 1500, {"from": frm, "to": to, "landTypeCode": LAND_TYPE[a.type]})]).get("XPT001", [])
     unit = []
     for d, p in deals:
         tot, ar = num(p.get("u_transaction_price_total_ja")), num(p.get("u_area_ja"))
@@ -245,6 +353,11 @@ def selftest():
     ln = {"type": "LineString", "coordinates": [[139.76, 35.68], [139.78, 35.68]]}
     assert abs(line_dist_m(ln, 35.681, 139.77) - 111) < 5, line_dist_m(ln, 35.681, 139.77)
     assert quarters_back(8)[0] < quarters_back(8)[1]
+    # 半径カバー: 中心付近は1枚、境界付近でも少数枚に収まる
+    c1 = cover_tiles(35.681236, 139.767125, 14, 1000)
+    assert 1 <= len(c1) <= 4, c1
+    c0 = cover_tiles(35.681236, 139.767125, 15, 0)
+    assert c0 == [tile(35.681236, 139.767125, 15)], c0
     print("selftest ok")
 
 

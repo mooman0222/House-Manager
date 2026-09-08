@@ -93,11 +93,26 @@ val LIVING_LAYERS = listOf(
 
 val POLY_LAYERS = HAZARD_LAYERS + BUILDING_LAYERS + LIVING_LAYERS
 
-/** 地図用に周辺8タイルまで広げ、keep と同じ区域の断片だけを拾う（all の層は全区画）。タイル境界で区域が切れて見えるのを防ぐ。 */
-fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> = lib.tiles(l.api, 15, 1).flatMap { ft ->
-    val (lv, summary) = l.f(ft.getJSONObject("properties"))
-    if (!l.all && summary !in keep) emptyList()
-    else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
+/** 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルだけ広げ、keep と同じ区域の断片だけを拾う（all の層は全区画）。従来の周辺8タイル (9枚) から1〜4枚程度に削減。 */
+fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> =
+    lib.multi(listOf(TileReq(l.api, 15, coverRadiusM = 1100.0))).values.firstOrNull().orEmpty().flatMap { ft ->
+        val (lv, summary) = l.f(ft.getJSONObject("properties"))
+        if (!l.all && summary !in keep) emptyList()
+        else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
+    }
+
+/** 地図オーバーレイ用にON層を一括取得する。層ごとの逐次9タイル取得を1回の multi に束ねる。 */
+fun layerAreasMulti(lib: Lib, layers: List<PolyLayer>, keeps: Map<String, Set<String>>): Map<String, List<MapArea>> {
+    if (layers.isEmpty()) return emptyMap()
+    val reqs = layers.map { TileReq(it.api, 15, coverRadiusM = 1100.0) }
+    val res = lib.multi(reqs)
+    return layers.zip(reqs).associate { (l, req) ->
+        l.label to res[req].orEmpty().flatMap { ft ->
+            val (lv, summary) = l.f(ft.getJSONObject("properties"))
+            if (!l.all && summary !in (keeps[l.label].orEmpty())) emptyList()
+            else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
+        }
+    }
 }
 
 fun quartersBack(n: Int): Pair<String, String> {
@@ -129,9 +144,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     fun emit() = partial(Candidate(inp, g, sections.toList(), MapLayers(areas.toList(), pins.toList()), null, null, done = false))
     emit()
 
-    fun poly(l: PolyLayer): Item {
-        progress(l.label)
-        val feats = L.hereFeatures(l.api)
+    fun poly(l: PolyLayer, feats: List<JSONObject>): Item {
         val hits = feats.map { l.f(it.getJSONObject("properties")) }
         feats.forEachIndexed { i, ft ->
             ringsOf(ft.getJSONObject("geometry")).forEach { areas += MapArea(l.label, hits[i].first, hits[i].second, it) }
@@ -141,13 +154,18 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         return Item(l.icon, l.label, lv, hits.map { it.second }.distinct().joinToString(" / "), l.detail)
     }
 
-    val hazard = HAZARD_LAYERS.map { poly(it) }
+    progress("災害リスク取得中")
+    val hazardFeats = L.hereAll(HAZARD_LAYERS.map { it.api })
+    val hazard = HAZARD_LAYERS.map { l -> progress(l.label); poly(l, hazardFeats[l.api].orEmpty()) }
     sections += Section(SEC_HAZARD, hazard); emit()
 
     val building = ArrayList<Item>()
-    building += BUILDING_LAYERS.map { poly(it) }
+    progress("建築条件取得中")
+    val buildingFeats = L.hereAll(BUILDING_LAYERS.map { it.api })
+    building += BUILDING_LAYERS.map { l -> progress(l.label); poly(l, buildingFeats[l.api].orEmpty()) }
     progress("都市計画道路")
-    val road = L.tiles("XKT030", 15).map { lineDistM(it.getJSONObject("geometry"), g.lat, g.lon).toInt() to it.getJSONObject("properties") }.filter { it.first <= 50 }.minByOrNull { it.first }
+    val road = L.multi(listOf(TileReq("XKT030", 15, coverRadiusM = 50.0))).values.firstOrNull().orEmpty()
+        .map { lineDistM(it.getJSONObject("geometry"), g.lat, g.lon).toInt() to it.getJSONObject("properties") }.filter { it.first <= 50 }.minByOrNull { it.first }
     building += if (road == null) Item("🛣️", "都市計画道路", Level.OK, "50m以内になし") else Item("🛣️", "都市計画道路", Level.WARN, "約${road.first}m（${road.second.s("planning_road_ja")}）", "将来の道路拡幅で敷地の一部が収用される、または建築制限を受ける可能性")
     inp.built?.let { b ->
         val age = LocalDate.now().year - b
@@ -161,9 +179,18 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     sections += Section(SEC_BUILDING, building); emit()
 
     val living = ArrayList<Item>()
-    living += LIVING_LAYERS.map { poly(it) }
+    progress("暮らし取得中")
+    val livingFeats = L.hereAll(LIVING_LAYERS.map { it.api } + "XKT013")
+    living += LIVING_LAYERS.map { l -> progress(l.label); poly(l, livingFeats[l.api].orEmpty()) }
     progress("駅")
-    val stFeat = L.nearFeatures("XKT015", 1500.0)
+    // 点系4種は1回の multi (z14＋半径カバー) でまとめて取得。従来 z15×9枚×4=36req → 10数req程度に削減。
+    val nearRes = L.nearAll(listOf(
+        Triple("XKT015", 1500.0, emptyMap()),
+        Triple("XKT007", 1000.0, emptyMap()),
+        Triple("XKT010", 1000.0, emptyMap()),
+        Triple("XKT017", 1000.0, emptyMap()),
+    ))
+    val stFeat = nearRes["XKT015"].orEmpty()
     val seen = HashSet<String>()
     val stUniq = stFeat.filter { seen.add(it.second.getJSONObject("properties").s("S12_001_ja")) }
     val st = stUniq.take(3).map { (d, ft) ->
@@ -179,7 +206,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     living += Item("🚉", "最寄駅", if (stD == null) Level.BAD else if (stD < 800) Level.OK else Level.WARN, if (st.isEmpty()) "1.5km以内に駅なし" else st.joinToString(" / "))
     for ((label, api, name, icon) in listOf(listOf("保育園・幼稚園", "XKT007", "preSchoolName_ja", "🧸"), listOf("医療機関", "XKT010", "P04_002_ja", "🏥"), listOf("図書館", "XKT017", "P27_005_ja", "📚"))) {
         progress(label)
-        val fs = L.nearFeatures(api)
+        val fs = nearRes[api].orEmpty()
         living += Item(icon, label, if (fs.isEmpty() && label != "図書館") Level.WARN else Level.INFO, "1km以内に${fs.size}件" + (if (fs.isEmpty()) "" else "  最寄 " + fs.take(2).joinToString(", ") { "${it.second.getJSONObject("properties").s(name)} ${it.first}m" }))
         fs.take(15).forEach { (d, ft) ->
             val (la, lo) = pointOf(ft.getJSONObject("geometry"))
@@ -187,7 +214,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         }
     }
     progress("将来推計人口")
-    val popJ = L.here("XKT013").firstOrNull()
+    val popJ = livingFeats["XKT013"]?.firstOrNull()?.getJSONObject("properties")
     var pop: Series? = null
     if (popJ != null) {
         val yrs = popJ.keys().asSequence().filter { it.matches(Regex("PTN_\\d{4}")) }.sorted().toList()
@@ -201,12 +228,13 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     sections += Section(SEC_LIVING, living); emit()
 
     progress("成約価格")
-    val (from20, to) = quartersBack(20)
-    val (from8, _) = quartersBack(8)
-    // XPT001 はズーム15でもタイル単位の代表点に集約されるため、座標での距離絞り込みは使えない。
-    // 周辺9タイル（約3km四方）を取り、住所に含まれる町丁目と一致する成約があればそれを優先する。
+    val (from8, to) = quartersBack(8)
+    val (from20, _) = quartersBack(20)
+    // XPT001 はタイル単位の代表点に集約されるため座標での距離絞り込みは使えない。
+    // z14＋半径1.5kmカバー (1〜4枚) で取得し、住所に含まれる町丁目と一致する成約があればそれを優先する。
+    // 推移は5年分、統計は直近2年分を使う。
     val addr = inp.address + g.title
-    val allDeals = L.tiles("XPT001", 15, 1, mapOf("from" to from20, "to" to to, "landTypeCode" to inp.kind.code)).map { it.getJSONObject("properties") }.mapNotNull { q ->
+    val allDeals = L.multi(listOf(TileReq("XPT001", 14, params = mapOf("from" to from20, "to" to to, "landTypeCode" to inp.kind.code), coverRadiusM = 1500.0))).values.firstOrNull().orEmpty().map { it.getJSONObject("properties") }.mapNotNull { q ->
         val totS = q.s("u_transaction_price_total_ja"); val tot = num(totS); val ar = num(q.s("u_area_ja"))
         val m = Regex("(\\d{4})年第(\\d)四半期").find(q.s("point_in_time_name_ja")) ?: return@mapNotNull null
         val same = q.s("district_name_ja").let { it.length >= 2 && it in addr }

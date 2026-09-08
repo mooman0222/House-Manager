@@ -62,16 +62,20 @@ private fun renderAreas(areas: List<MapArea>): AreaImage? {
     val paints = Level.entries.associateWith { lv ->
         Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = lv.color().copy(alpha = 0.3f).toArgb() }
     }
-    // 重なりは重い判定を後に描く（以前の半透明の重ね塗りより平坦になる）
-    areas.sortedBy { rank(it.level) }.forEach { a ->
+    // 同一ラベル・同一レベルの重なりは1回だけ塗る。タイル境界をまたぐ同一図形の重複や、
+    // 同種別内の重複指定（複数河川の浸水域など）が半透明の重ね塗りで濃く二重に見えるのを防ぐ。
+    // 判定の重いものは後に描く。レベル違いの重なり（WARNの下のBADなど）は従来通り重ねる。
+    areas.groupBy { it.label to it.level }.entries.sortedBy { rank(it.key.second) }.forEach { (key, group) ->
         val path = Path()
-        a.ring.forEachIndexed { i, (la, lo) ->
-            val x = ((lo - minLon) / (maxLon - minLon) * w).toFloat()
-            val y = ((maxLat - la) / (maxLat - minLat) * h).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        group.forEach { a ->
+            a.ring.forEachIndexed { i, (la, lo) ->
+                val x = ((lo - minLon) / (maxLon - minLon) * w).toFloat()
+                val y = ((maxLat - la) / (maxLat - minLat) * h).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            path.close()
         }
-        path.close()
-        canvas.drawPath(path, paints.getValue(a.level))
+        canvas.drawPath(path, paints.getValue(key.second))
     }
     return AreaImage(bmp, LatLngBounds(LatLng(minLat, minLon), LatLng(maxLat, maxLon)))
 }
@@ -127,11 +131,11 @@ fun rememberOverlay(c: Candidate, reinfoKey: String): Overlay {
         if (reinfoKey.isBlank() || !c.done) return@LaunchedEffect
         val lib = Lib(reinfoKey.trim(), c.geo.lat, c.geo.lon, File(ctx.cacheDir, "tiles"))
         snapshotFlow { ov.areasOn(c) }.collect { on ->
-            for (l in POLY_LAYERS) {
-                if (!l.wide || l.label !in on || l.label in ov.wide) continue
-                val own = c.map.areas.filter { it.label == l.label }
-                ov.wide[l.label] = try { withContext(Dispatchers.IO) { layerAreas(lib, l, own.map { it.summary }.toSet()) } } catch (e: CancellationException) { throw e } catch (e: Exception) { own }
-            }
+            val targets = POLY_LAYERS.filter { it.wide && it.label in on && it.label !in ov.wide }
+            if (targets.isEmpty()) return@collect
+            val keeps = targets.associate { l -> l.label to c.map.areas.filter { it.label == l.label }.map { it.summary }.toSet() }
+            val got = try { withContext(Dispatchers.IO) { layerAreasMulti(lib, targets, keeps) } } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            targets.forEach { l -> ov.wide[l.label] = got?.get(l.label) ?: c.map.areas.filter { it.label == l.label } }
         }
     }
     return ov
