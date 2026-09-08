@@ -5,14 +5,19 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.litertlm.Conversation
 import kotlinx.coroutines.CancellationException
@@ -106,12 +111,23 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
     }
 
     Column(modifier.fillMaxSize().imePadding()) { // キーボード表示中も入力欄が隠れないようにする
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), state = list, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("AIアシスタント", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            IconButton({ state.reset() }, enabled = state.busy.isEmpty() && state.log.isNotEmpty()) {
+                Icon(Icons.Default.Refresh, contentDescription = "会話をリセット")
+            }
+        }
+        HorizontalDivider()
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), state = list, verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
             if (log.isEmpty()) item { Text(intro, style = MaterialTheme.typography.bodySmall) }
             items(log) { (me, t) ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = if (me) Arrangement.End else Arrangement.Start) {
-                    Card(colors = CardDefaults.cardColors(containerColor = if (me) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
-                        Text(if (me) t else t.stripMd().ifEmpty { state.busy }, Modifier.padding(10.dp).widthIn(max = 300.dp), style = MaterialTheme.typography.bodyMedium)
+                    Card(
+                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (me) 18.dp else 4.dp, bottomEnd = if (me) 4.dp else 18.dp),
+                        colors = CardDefaults.cardColors(containerColor = if (me) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)
+                    ) {
+                        Text(if (me) t else t.stripMd().ifEmpty { state.busy }, Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 300.dp), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -122,9 +138,11 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
             quick.forEach { q -> AssistChip({ send(q) }, { Text(q) }, enabled = state.busy.isEmpty()) }
         }
         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("依頼や質問を入力") }, maxLines = 3, enabled = state.busy.isEmpty())
-            Button({ send(input) }, enabled = state.busy.isEmpty() && input.isNotBlank()) { Text("送信") }
-            TextButton({ state.reset() }, enabled = state.busy.isEmpty() && state.log.isNotEmpty()) { Text("リセット") }
+            OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("依頼や質問を入力") }, maxLines = 3,
+                enabled = state.busy.isEmpty(), shape = RoundedCornerShape(24.dp))
+            FilledIconButton({ send(input) }, enabled = state.busy.isEmpty() && input.isNotBlank(), modifier = Modifier.size(48.dp)) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "送信")
+            }
         }
     }
 }
