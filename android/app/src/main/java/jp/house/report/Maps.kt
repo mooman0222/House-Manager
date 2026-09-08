@@ -119,13 +119,15 @@ class Overlay {
     fun areaLabels(c: Candidate) = (c.map.areas.map { it.label } + POLY_LAYERS.filter { it.all }.map { it.label }).distinct()
     fun pinCats(c: Candidate) = c.map.pins.map { it.category }.distinct()
     fun areasOn(c: Candidate) = onAreas ?: c.map.areas.filter { it.level != Level.INFO }.map { it.label }.toSet()
-    fun pinsOn(c: Candidate) = onPins ?: pinCats(c).toSet()
+    fun pinsOn(c: Candidate) = onPins ?: emptySet()
 }
 
 @Composable
-fun rememberOverlay(c: Candidate, reinfoKey: String): Overlay {
+fun rememberOverlay(c: Candidate, app: AppState): Overlay {
     val ctx = LocalContext.current
-    val ov = remember(c.input.key) { Overlay() }
+    // 候補を切り替えるたび作り直すと層ON/OFF・周辺取得結果がリセットされるため、AppState側に保持する
+    val ov = remember(c.input.key) { app.overlays.getOrPut(c.input.key) { Overlay() } }
+    val reinfoKey = app.reinfoKey
     // 周辺8タイルの追加取得は調査完了後に。途中の区域一覧で絞ると取りこぼす
     LaunchedEffect(c.input.key, reinfoKey, c.done) {
         if (reinfoKey.isBlank() || !c.done) return@LaunchedEffect

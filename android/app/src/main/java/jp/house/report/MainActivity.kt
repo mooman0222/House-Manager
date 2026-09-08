@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.CameraPositionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +87,11 @@ class AppState(application: Application) : AndroidViewModel(application) {
     /** 保存済み + 調査済み（未保存）を、保存順で */
     val candidates: List<Input> get() = (saved + results.values.map { it.input }).distinctBy { it.key }
 
+    /** 地図カメラ。タブ切替で地図画面が作り直されても位置・ズームを保つためViewModel側に持つ */
+    val mapCamera = CameraPositionState(CameraPosition.fromLatLngZoom(LatLng(35.681, 139.767), 11f))
+    /** 地図オーバーレイの表示状態（層ON/OFF・タップ選択・周辺取得結果）を候補ごとに保持。切替でリセットされないようにする */
+    val overlays = mutableMapOf<String, Overlay>()
+
     // 調査は1件ずつ。実行中は queue に並べ、終わったら次を始める。削除されたらキャンセルする
     private var running: Pair<String, Job>? = null
     val queue = mutableStateListOf<Input>()
@@ -127,6 +135,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (runningKey == inp.key) running?.second?.cancel() // finally で次の候補が始まる
         queue.removeAll { it.key == inp.key }
         saved = saved.filter { it.key != inp.key }; storeSaved(); results.remove(inp.key); failures.remove(inp.key)
+        overlays.remove(inp.key)
         if (selected == inp.key) selected = null
     }
     fun isSaved(inp: Input) = saved.any { it.key == inp.key }
@@ -136,7 +145,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (runningKey == old.key) running?.second?.cancel()
         queue.removeAll { it.key == old.key }
         saved = if (saved.any { it.key == old.key }) saved.map { if (it.key == old.key) new else it } else saved + new; storeSaved()
-        results.remove(old.key); failures.remove(old.key)
+        results.remove(old.key); failures.remove(old.key); overlays.remove(old.key)
         checks[old.key]?.let { checks[new.key] = it; checks.remove(old.key); persistChecks() }
         customChecks[old.key]?.let { customChecks[new.key] = it; customChecks.remove(old.key); persistCustom() }
         memos[old.key]?.let { memos[new.key] = it; memos.remove(old.key); persistMemos() }
@@ -231,19 +240,25 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
         }
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (app.tab) {
-                0 -> HomeScreen(app)
-                1 -> CompareScreen(app)
-                2 -> ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
-                    listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true })) }, Modifier.fillMaxSize())
-                else -> SettingsScreen(app)
-            }
+            // タブ切替で画面を作り直すと地図のMapViewまで破棄され、戻るたび世界地図（アフリカ沖）から始まる。
+            // 各タブを破棄せず表示だけ切り替え、地図の状態（位置・読込済み区域・ページ）を保つ
+            TabKeep(app.tab == 0) { HomeScreen(app) }
+            TabKeep(app.tab == 1) { CompareScreen(app) }
+            TabKeep(app.tab == 2) { ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
+                listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true })) }, Modifier.fillMaxSize()) }
+            TabKeep(app.tab == 3) { SettingsScreen(app) }
             // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
             if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("ページを取得し、住所・価格・面積・築年を読み取っています。終わるまでお待ちください。", style = MaterialTheme.typography.bodySmall) } },
                 confirmButton = {})
         }
     }
+}
+
+/** タブの中身を破棄せず、非表示時はサイズ0にして当たり判定も消す */
+@Composable
+private fun TabKeep(visible: Boolean, content: @Composable () -> Unit) {
+    Box(if (visible) Modifier.fillMaxSize() else Modifier.size(0.dp)) { content() }
 }
 
 @Composable

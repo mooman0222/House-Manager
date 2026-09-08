@@ -28,12 +28,10 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
-import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -43,8 +41,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-private val TOKYO = LatLng(35.681, 139.767)
 
 /** 地図が主画面。上に検索バー、下のシートに候補カード（横スワイプで切替、上に引くと詳細）。 */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -92,7 +88,8 @@ fun HomeScreen(app: AppState) {
     // 表示中の候補が未調査なら自動で調べる（失敗したものは再試行ボタンに任せる）
     LaunchedEffect(current?.key, app.status) { current?.let { if (app.results[it.key] == null && it.key !in app.failures && app.status.isEmpty() && app.key.isNotBlank()) app.run(it) } }
 
-    val camera = rememberCameraPositionState { position = CameraPosition.fromLatLngZoom(TOKYO, 11f) }
+    // カメラは app.mapCamera（タブ切替でも保持）。画面内で remember すると切替のたび初期位置に戻る
+    val camera = app.mapCamera
     // 地図キー無しでは Maps SDK が未初期化のため CameraUpdateFactory が NPE になる。地図表示時のみ追従する
     val hasMap = mapsKey(ctx).isNotBlank()
     // 地図の追従はページ静止後に限定する。スワイプ途中の通過ページで作り直すと重い
@@ -103,7 +100,7 @@ fun HomeScreen(app: AppState) {
     }
     val mapCand = mapKey?.let { app.results[it] } ?: cur
     LaunchedEffect(mapCand?.geo, hasMap) { if (hasMap) mapCand?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
-    val ov = mapCand?.let { rememberOverlay(it, app.reinfoKey) }
+    val ov = mapCand?.let { rememberOverlay(it, app) }
     // 地図タップで選んだ地点。住所が取れたらカードで確認してから候補に追加する
     var pick by remember { mutableStateOf<LatLng?>(null) }
     var pickAddr by remember { mutableStateOf("") }
