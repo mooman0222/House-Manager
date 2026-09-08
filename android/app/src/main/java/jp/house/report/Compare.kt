@@ -114,54 +114,38 @@ fun CompareScreen(app: AppState) {
     }
 }
 
-/** 軸を1つ選んで候補を横棒で並べる。重視する順（優先度）で総合順位も出す */
+/** 全ての軸を横棒で並べる */
 @Composable
 private fun AxisCompare(app: AppState, candidates: List<Input>, open: (Input) -> Unit) {
-    var axisName by rememberSaveable { mutableStateOf("安全") }
-    var prio by rememberSaveable { mutableStateOf(listOf("安全", "暮らし", "価格")) }
-    val axis = AXES.first { it.name == axisName }
     val done = candidates.mapNotNull { inp -> app.results[inp.key]?.takeIf { it.done } }
-    val ranked = done.sortedWith(compareByDescending<Candidate> { c -> prio.map { p -> score(AXES.first { it.name == p }.level(c) ?: Level.INFO) }.fold(0.0) { acc, s -> acc * 4 + s } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("重視する順（タップで先頭に）", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            prio.forEachIndexed { i, p -> AssistChip({ prio = listOf(p) + prio.filter { it != p } }, { Text("${i + 1}. $p") }) }
-        }
-        Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("総合順位", style = MaterialTheme.typography.titleMedium)
-            if (ranked.isEmpty()) Text("調査済みの候補がありません", style = MaterialTheme.typography.bodySmall)
-            ranked.forEachIndexed { i, c ->
-                Row(Modifier.fillMaxWidth().clickable { open(c.input) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${i + 1}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(c.input.address, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    prio.forEach { p -> Dot(AXES.first { it.name == p }.level(c) ?: Level.INFO) }
-                }
-            }
-        } }
-        Text("軸を選んで比べる", style = MaterialTheme.typography.labelLarge)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AXES.forEach { a -> FilterChip(a.name == axisName, { axisName = a.name }, { Text(a.name) }) }
-        }
-        Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            val rows = done.map { it to axis.value(it) }
-            val vals = rows.mapNotNull { it.second }
-            val lo = vals.minOrNull() ?: 0.0; val hi = vals.maxOrNull() ?: 1.0
-            val sorted = rows.sortedWith(compareBy(nullsLast()) { r -> r.second?.let { if (axis.lowerBetter) it else -it } })
-            if (axis.unit.isNotEmpty()) Text(if (axis.lowerBetter) "小さいほど良い" else "大きいほど良い", style = MaterialTheme.typography.labelSmall, color = C_INFO)
-            sorted.forEach { (c, v) ->
-                val lv = axis.level(c)
-                Column(Modifier.fillMaxWidth().clickable { open(c.input) }.padding(vertical = 4.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(c.input.address, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { lv?.let { Dot(it) }; Text(axis.text(c), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
-                    }
-                    val frac = if (v == null) 0f else if (hi == lo) 1f else ((v - lo) / (hi - lo)).toFloat().let { if (axis.lowerBetter) 1f - it * 0.85f else 0.15f + it * 0.85f }
-                    Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
-                        Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(lv?.color() ?: MaterialTheme.colorScheme.primary))
-                    }
-                }
-            }
-            if (rows.isEmpty()) Text("調査済みの候補がありません", style = MaterialTheme.typography.bodySmall)
-        } }
+        AXES.forEach { axis -> AxisCard(axis, done, open) }
     }
+}
+
+/** 1つの軸の候補別横棒 */
+@Composable
+private fun AxisCard(axis: Axis, done: List<Candidate>, open: (Input) -> Unit) {
+    Card { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(axis.name, style = MaterialTheme.typography.titleMedium)
+        val rows = done.map { it to axis.value(it) }
+        val vals = rows.mapNotNull { it.second }
+        val lo = vals.minOrNull() ?: 0.0; val hi = vals.maxOrNull() ?: 1.0
+        val sorted = rows.sortedWith(compareBy(nullsLast()) { r -> r.second?.let { if (axis.lowerBetter) it else -it } })
+        if (axis.unit.isNotEmpty()) Text(if (axis.lowerBetter) "小さいほど良い" else "大きいほど良い", style = MaterialTheme.typography.labelSmall, color = C_INFO)
+        sorted.forEach { (c, v) ->
+            val lv = axis.level(c)
+            Column(Modifier.fillMaxWidth().clickable { open(c.input) }.padding(vertical = 4.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(c.input.address, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) { lv?.let { Dot(it) }; Text(axis.text(c), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
+                }
+                val frac = if (v == null) 0f else if (hi == lo) 1f else ((v - lo) / (hi - lo)).toFloat().let { if (axis.lowerBetter) 1f - it * 0.85f else 0.15f + it * 0.85f }
+                Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
+                    Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(lv?.color() ?: MaterialTheme.colorScheme.primary))
+                }
+            }
+        }
+        if (rows.isEmpty()) Text("調査済みの候補がありません", style = MaterialTheme.typography.bodySmall)
+    } }
 }
