@@ -1,5 +1,6 @@
 package jp.house.report
 
+import android.util.Log
 import com.google.ai.edge.litertlm.Tool
 import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
@@ -13,6 +14,7 @@ import java.time.LocalDate
  */
 class ReinfoTools(private val key: String, private val cacheDir: File) : ToolSet {
     private fun lib(address: String): Lib {
+        Log.i("ReinfoTools", "call address=$address") // 実機でツールが呼ばれたか logcat で追えるように
         if (key.isBlank()) throw ApiError("不動産情報ライブラリの API キーが未設定です。設定画面で入力してください")
         val g = geocode(address)
         return Lib(key, g.lat, g.lon, cacheDir)
