@@ -101,9 +101,13 @@ fun PolyLayer.item(hits: List<Pair<Level, String>>): Item {
     return Item(icon, label, lv, hits.map { it.second }.distinct().joinToString(" / "), detail)
 }
 
-/** 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルを取り、keep と同じ区域の断片だけを拾う（all の層は全区画）。z15 のタイル幅は約1kmなので、中心の周囲1周 (3x3) に収まる。 */
+/**
+ * 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルを取り、keep と同じ区域の断片だけを拾う（all の層は全区画）。
+ * z14 (タイル幅約2km、面系 API 全層の下限内) なら 2x2〜3x3 枚で円を必ず覆える。z15 だと最大4列になり coverTiles の 3x3 上限で片側が欠けた。
+ */
+const val WIDE_Z = 14
 fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> =
-    lib.multi(listOf(TileReq(l.api, 15, coverRadiusM = 1100.0))).values.firstOrNull().orEmpty().flatMap { ft ->
+    lib.multi(listOf(TileReq(l.api, WIDE_Z, coverRadiusM = 1100.0))).values.firstOrNull().orEmpty().flatMap { ft ->
         val (lv, summary) = l.f(ft.getJSONObject("properties"))
         if (!l.all && summary !in keep) emptyList()
         else ringsOf(ft.getJSONObject("geometry")).map { MapArea(l.label, lv, summary, it) }
@@ -112,7 +116,7 @@ fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> =
 /** 地図オーバーレイ用にON層を一括取得する。層ごとの逐次9タイル取得を1回の multi に束ねる。 */
 fun layerAreasMulti(lib: Lib, layers: List<PolyLayer>, keeps: Map<String, Set<String>>): Map<String, List<MapArea>> {
     if (layers.isEmpty()) return emptyMap()
-    val reqs = layers.map { TileReq(it.api, 15, coverRadiusM = 1100.0) }
+    val reqs = layers.map { TileReq(it.api, WIDE_Z, coverRadiusM = 1100.0) }
     val res = lib.multi(reqs)
     return layers.zip(reqs).associate { (l, req) ->
         l.label to res[req].orEmpty().flatMap { ft ->

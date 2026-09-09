@@ -22,3 +22,17 @@ class CoverTilesTest {
         assertEquals(listOf(tile(35.681, 139.767, z)), coverTiles(35.681, 139.767, z, 0.0))
     }
 }
+
+/** 地図の周辺取得 (z14, 半径1100m) は 3x3 上限に当たらず、円を覆うタイルがすべて入ること */
+class WideCoverTest {
+    @Test fun coversCircleWithoutCap() {
+        for (lat in listOf(35.681, 43.06, 26.21)) for (i in 0..80) {
+            val lon = 139.7 + i * 0.0006
+            val tiles = coverTiles(lat, lon, WIDE_Z, 1100.0)
+            val dLat = 1100.0 / 111320.0; val dLon = 1100.0 / (111320.0 * Math.cos(Math.toRadians(lat)))
+            // 円の外接矩形の四隅を含むタイルが全部入っていれば、上限で欠けていない
+            for ((la, lo) in listOf(lat - dLat to lon - dLon, lat - dLat to lon + dLon, lat + dLat to lon - dLon, lat + dLat to lon + dLon)) assertTrue("corner tile missing at $lat,$lon", tile(la, lo, WIDE_Z) in tiles)
+            assertTrue(tiles.size in 4..9)
+        }
+    }
+}

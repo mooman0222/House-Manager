@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.net.Uri
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -44,7 +45,10 @@ private data class AreaImage(val bmp: Bitmap, val bounds: LatLngBounds)
 
 private fun rank(lv: Level) = when (lv) { Level.BAD -> 2; Level.WARN -> 1; else -> 0 }
 
-private fun renderAreas(areas: List<MapArea>): AreaImage? {
+/** 地図に描く「周辺」の半径。区域フィルもこの円で切り、周辺タイル（約1km四方）の並びが地点に対して偏って見えないようにする */
+const val AROUND_M = 1000.0
+
+private fun renderAreas(areas: List<MapArea>, center: LatLng): AreaImage? {
     if (areas.isEmpty()) return null
     var minLat = 90.0; var maxLat = -90.0; var minLon = 180.0; var maxLon = -180.0; var n = 0
     areas.forEach { a -> a.ring.forEach { (la, lo) ->
@@ -59,6 +63,10 @@ private fun renderAreas(areas: List<MapArea>): AreaImage? {
     val h = (w * hM / wM).toInt().coerceIn(64, 2048)
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
+    // 取得範囲はタイル単位（地点がタイル端なら片側だけ1枚分広い）なので、描くのは円の内側だけにする
+    val cx = ((center.longitude - minLon) / (maxLon - minLon) * w).toFloat(); val cy = ((maxLat - center.latitude) / (maxLat - minLat) * h).toFloat()
+    val rx = (AROUND_M / wM * w).toFloat(); val ry = (AROUND_M / hM * h).toFloat()
+    canvas.clipPath(Path().apply { addOval(RectF(cx - rx, cy - ry, cx + rx, cy + ry), Path.Direction.CW) })
     val paints = Level.entries.associateWith { lv ->
         Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = lv.color().copy(alpha = 0.3f).toArgb() }
     }
@@ -146,6 +154,7 @@ fun rememberOverlay(c: Candidate, app: AppState): Overlay {
 /** 表示中の区域のうち、タップ地点を含むもの（後に描かれたものを優先） */
 fun Overlay.areaAt(c: Candidate, lat: Double, lon: Double): MapArea? {
     val on = areasOn(c)
+    if (distM(c.geo.lat, c.geo.lon, lat, lon) > AROUND_M) return null // 円の外は描いていない
     val areas = c.map.areas.filter { it.label in on && it.label !in wide } + on.flatMap { wide[it].orEmpty() }
     return areas.lastOrNull { a -> inRing(lon, lat, a.ring.map { (la, lo) -> lo to la }) }
 }
@@ -178,7 +187,7 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
     // フィルは1枚に焼いて出す。内容が変わった時だけ裏スレッドで作り直す（タップ判定はベクタのまま areaAt で行う）
     var areaImg by remember { mutableStateOf<AreaImage?>(null) }
     LaunchedEffect(areas) {
-        val img = withContext(Dispatchers.Default) { renderAreas(areas) }
+        val img = withContext(Dispatchers.Default) { renderAreas(areas, here) }
         val old = areaImg; areaImg = img; old?.bmp?.recycle()
     }
     areaImg?.let { (bmp, bounds) ->
@@ -186,7 +195,7 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
         GroundOverlay(image = desc, position = GroundOverlayPosition.create(bounds))
     }
     val circlePattern = remember { listOf(Dash(30f), Gap(20f)) }
-    Circle(center = here, radius = 1000.0, fillColor = Color.Transparent, strokeColor = Color(0xFF37474F), strokeWidth = 6f, strokePattern = circlePattern)
+    Circle(center = here, radius = AROUND_M, fillColor = Color.Transparent, strokeColor = Color(0xFF37474F), strokeWidth = 6f, strokePattern = circlePattern)
     val pinsOn = ov.pinsOn(c)
     val density = LocalDensity.current
     c.map.pins.filter { it.category in pinsOn }.forEach { p ->
