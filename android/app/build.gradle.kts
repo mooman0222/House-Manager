@@ -47,6 +47,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.0") // Gemma を端末内で動かす
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303") // Android の org.json は JVM テストでは空実装のため
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }

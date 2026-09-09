@@ -107,7 +107,7 @@ fun HomeScreen(app: AppState) {
     LaunchedEffect(pick) {
         pickAddr = ""
         val ll = pick ?: return@LaunchedEffect
-        pickAddr = try { withContext(Dispatchers.IO) { reverseGeocode(ll.latitude, ll.longitude, File(ctx.cacheDir, "tiles")) } } catch (e: Exception) { "住所を取得できませんでした" }
+        pickAddr = try { withContext(Dispatchers.IO) { reverseGeocode(ll.latitude, ll.longitude, tilesDir(ctx)) } } catch (e: Exception) { "住所を取得できませんでした" }
     }
 
     app.pendingImport?.let { inp -> ImportDialog(inp, onRun = { app.add(it); app.pendingImport = null }, onDismiss = { app.pendingImport = null }) }

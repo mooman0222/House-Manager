@@ -131,7 +131,7 @@ fun rememberOverlay(c: Candidate, app: AppState): Overlay {
     // 周辺8タイルの追加取得は調査完了後に。途中の区域一覧で絞ると取りこぼす
     LaunchedEffect(c.input.key, reinfoKey, c.done) {
         if (reinfoKey.isBlank() || !c.done) return@LaunchedEffect
-        val lib = Lib(reinfoKey.trim(), c.geo.lat, c.geo.lon, File(ctx.cacheDir, "tiles"))
+        val lib = Lib(reinfoKey.trim(), c.geo.lat, c.geo.lon, tilesDir(ctx))
         snapshotFlow { ov.areasOn(c) }.collect { on ->
             val targets = POLY_LAYERS.filter { it.wide && it.label in on && it.label !in ov.wide }
             if (targets.isEmpty()) return@collect

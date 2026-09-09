@@ -74,9 +74,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val reinfoKey get() = key.trim()
 
     var tab by mutableStateOf(0)
-    val results = mutableStateMapOf<String, Candidate>()
-    val failures = mutableStateMapOf<String, String>()
     var saved by mutableStateOf(loadSaved())
+    /** 調査結果。完了分は ResultStore に保存し、起動時に復元するので再調査しない。ponytail: 起動時に主スレッドで同期読み込み。候補が数十件に増えて起動が重くなったら IO スレッドへ */
+    val results = mutableStateMapOf<String, Candidate>().apply { putAll(ResultStore.load(ctx, saved)) }
+    val failures = mutableStateMapOf<String, String>()
     var status by mutableStateOf("")
     var error by mutableStateOf("")
     /** 地図画面のシートで開いている候補 */
@@ -114,9 +115,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
             try {
                 // runInterruptible: キャンセル時にスレッドを割り込み、httpJson の待機で抜ける
                 val c = runInterruptible(Dispatchers.IO) {
-                    analyze(inp, apiKey, File(ctx.cacheDir, "tiles"), fix, partial = { if (isActive) results[inp.key] = it }) { p -> if (isActive) status = p }
+                    analyze(inp, apiKey, tilesDir(ctx), fix, partial = { if (isActive) results[inp.key] = it }) { p -> if (isActive) status = p }
                 }
-                if (isActive) results[inp.key] = c
+                if (isActive) { results[inp.key] = c; ResultStore.save(ctx, c) }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 results.remove(inp.key)
@@ -135,7 +136,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     fun remove(inp: Input) {
         if (runningKey == inp.key) running?.second?.cancel() // finally で次の候補が始まる
         queue.removeAll { it.key == inp.key }
-        saved = saved.filter { it.key != inp.key }; storeSaved(); results.remove(inp.key); failures.remove(inp.key)
+        saved = saved.filter { it.key != inp.key }; storeSaved(); results.remove(inp.key); failures.remove(inp.key); ResultStore.delete(ctx, inp.key)
         overlays.remove(inp.key)
         if (selected == inp.key) selected = null
     }
@@ -146,7 +147,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (runningKey == old.key) running?.second?.cancel()
         queue.removeAll { it.key == old.key }
         saved = if (saved.any { it.key == old.key }) saved.map { if (it.key == old.key) new else it } else saved + new; storeSaved()
-        results.remove(old.key); failures.remove(old.key); overlays.remove(old.key)
+        results.remove(old.key); failures.remove(old.key); overlays.remove(old.key); ResultStore.delete(ctx, old.key)
         checks[old.key]?.let { checks[new.key] = it; checks.remove(old.key); persistChecks() }
         customChecks[old.key]?.let { customChecks[new.key] = it; customChecks.remove(old.key); persistCustom() }
         memos[old.key]?.let { memos[new.key] = it; memos.remove(old.key); persistMemos() }
@@ -154,7 +155,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         run(new)
     }
     /** キャッシュ削除。調査中は拒否 */
-    fun clearCache(): Boolean { if (running != null) return false; File(ctx.cacheDir, "tiles").deleteRecursively(); results.clear(); return true }
+    fun clearCache(): Boolean { if (running != null) return false; tilesDir(ctx).deleteRecursively(); ResultStore.clear(ctx); results.clear(); return true }
     private fun loadSaved(): List<Input> { val f = File(ctx.filesDir, "candidates.json"); if (!f.exists()) return emptyList(); val a = JSONArray(f.readText()); return (0 until a.length()).map { Input.from(a.getJSONObject(it)) } }
     private fun storeSaved() = File(ctx.filesDir, "candidates.json").writeText(JSONArray(saved.map { it.toJson() }).toString())
 
@@ -246,7 +247,7 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
             TabKeep(app.tab == 0) { HomeScreen(app) }
             TabKeep(app.tab == 1) { CompareScreen(app) }
             TabKeep(app.tab == 2) { ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
-                listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = listOf(tool(ReinfoTools(app.reinfoKey, File(c.cacheDir, "tiles"))))) }, Modifier.fillMaxSize()) }
+                listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = listOf(tool(ReinfoTools(app.reinfoKey, tilesDir(c))))) }, Modifier.fillMaxSize()) }
             TabKeep(app.tab == 3) { SettingsScreen(app) }
             // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
             if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },
