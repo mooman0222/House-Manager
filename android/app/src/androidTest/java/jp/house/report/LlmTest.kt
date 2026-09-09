@@ -3,6 +3,11 @@ package jp.house.report
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.google.ai.edge.litertlm.Tool
+import com.google.ai.edge.litertlm.ToolParam
+import com.google.ai.edge.litertlm.ToolSet
+import com.google.ai.edge.litertlm.tool
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -36,6 +41,20 @@ class LlmTest {
         Log.i("LlmTest", "chat ${chunks.size} chunks ${System.currentTimeMillis() - t}ms first=[${chunks.firstOrNull()}] second=[${chunks.getOrNull(1)}] last=[${chunks.lastOrNull()}]")
         Log.i("LlmTest", "joined=[${chunks.joinToString("")}]")
         assertTrue(chunks.isNotEmpty())
+
+        // ツール呼び出し: モデルがツールを選び、戻り値を踏まえて答えられるか（通信なしの固定値ツールで確認）
+        t = System.currentTimeMillis()
+        val ts = FakeTools()
+        val ans = runBlocking { Llm.chat(ctx, "質問にはツールで調べて日本語で一文で答えてください。", tools = listOf(tool(ts))).use { c -> c.sendMessageAsync("東京都千代田区丸の内1丁目の洪水リスクを教えて").toList().joinToString("") { it.text } } }
+        Log.i("LlmTest", "tool called=${ts.called} ${System.currentTimeMillis() - t}ms ans=[$ans]")
+        assertTrue("tool not called", ts.called != null)
+        assertTrue("answer lacks tool result: $ans", "3〜5m" in ans)
+    }
+
+    class FakeTools : ToolSet {
+        var called: String? = null
+        @Tool(description = "住所を指定して、その地点の洪水などの災害リスクを調べる")
+        fun lookupArea(@ToolParam(description = "日本の住所") address: String): String { called = address; return "洪水浸水: 3〜5m（想定最大規模）\n土砂災害: 該当なし" }
     }
 }
 

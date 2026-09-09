@@ -93,6 +93,14 @@ val LIVING_LAYERS = listOf(
 
 val POLY_LAYERS = HAZARD_LAYERS + BUILDING_LAYERS + LIVING_LAYERS
 
+fun PolyLayer.hits(feats: List<JSONObject>) = feats.map { f(it.getJSONObject("properties")) }
+/** 該当区域の判定をまとめて1項目にする。該当なしなら none の文言 */
+fun PolyLayer.item(hits: List<Pair<Level, String>>): Item {
+    if (hits.isEmpty()) return Item(icon, label, noneLevel, none, detail)
+    val lv = hits.map { it.first }.let { s -> if (Level.BAD in s) Level.BAD else if (Level.WARN in s) Level.WARN else if (Level.OK in s) Level.OK else Level.INFO }
+    return Item(icon, label, lv, hits.map { it.second }.distinct().joinToString(" / "), detail)
+}
+
 /** 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルだけ広げ、keep と同じ区域の断片だけを拾う（all の層は全区画）。従来の周辺8タイル (9枚) から1〜4枚程度に削減。 */
 fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> =
     lib.multi(listOf(TileReq(l.api, 15, coverRadiusM = 1100.0))).values.firstOrNull().orEmpty().flatMap { ft ->
@@ -145,13 +153,11 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
     emit()
 
     fun poly(l: PolyLayer, feats: List<JSONObject>): Item {
-        val hits = feats.map { l.f(it.getJSONObject("properties")) }
+        val hits = l.hits(feats)
         feats.forEachIndexed { i, ft ->
             ringsOf(ft.getJSONObject("geometry")).forEach { areas += MapArea(l.label, hits[i].first, hits[i].second, it) }
         }
-        if (hits.isEmpty()) return Item(l.icon, l.label, l.noneLevel, l.none, l.detail)
-        val lv = hits.map { it.first }.let { s -> if (Level.BAD in s) Level.BAD else if (Level.WARN in s) Level.WARN else if (Level.OK in s) Level.OK else Level.INFO }
-        return Item(l.icon, l.label, lv, hits.map { it.second }.distinct().joinToString(" / "), l.detail)
+        return l.item(hits)
     }
 
     progress("災害リスク取得中")

@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 /** 全体アシスタントの前置き。調査済みの物件はすべて要約を渡し、未調査は名前だけ知らせる。 */
 fun assistantSystem(analyzed: Collection<Candidate>, unanalyzed: List<Input>) = buildString {
     append("あなたは住宅購入を検討する人を支援する不動産アドバイザーです。以下の調査結果だけを根拠に、比較や質問に日本語で簡潔に答えてください。")
-    append("調査結果に無いことは推測せず「調査結果にはありません」と答えてください。出力はプレーンテキストで、Markdown 記法（**、#、- などの記号）は使わず、箇条書きは「・」で始めてください。\n\n")
+    append("調査結果に無い住所の災害リスク・建築条件や、周辺の公示地価を聞かれたらツールで調べて答えてください。それ以外で調査結果に無いことは推測せず「調査結果にはありません」と答えてください。出力はプレーンテキストで、Markdown 記法（**、#、- などの記号）は使わず、箇条書きは「・」で始めてください。\n\n")
     if (analyzed.isEmpty()) append("調査済みの物件はまだありません。「探す」画面で住所を調べるよう案内してください。\n")
     analyzed.forEachIndexed { i, c -> append("【物件${i + 1}】\n"); append(c.digest()); append("\n") }
     if (unanalyzed.isNotEmpty()) append("保存済みだが未調査の物件（比べる画面で読み込むと使えます）: " + unanalyzed.joinToString("、") { it.address })
