@@ -133,10 +133,11 @@ fun HomeScreen(app: AppState) {
                 Text("上の検索バーに住所を入れるか、地図をタップして地点を選ぶと候補に追加できます。ポータルサイトの物件ページを共有メニューから送ることもできます。", style = MaterialTheme.typography.bodySmall)
             } else HorizontalPager(pager, Modifier.fillMaxWidth()) { page ->
                 val inp = candidates[page]
-                // 送り中に通過するページは住所だけの薄いカードにする。チャート・確認リスト・区域画像まで作ると
-                // ピンのタップで数件分の構成が一気に走り、引っかかりとメモリ圧の原因になる
-                if (page != settledPage) LightPage(inp)
-                else CandidatePage(app, inp, app.results[inp.key], app.failures[inp.key], expanded = sheet.bottomSheetState.currentValue == SheetValue.Expanded,
+                val expanded = sheet.bottomSheetState.currentValue == SheetValue.Expanded
+                // 詳細（チャート・成約一覧・確認リスト）は、シートを開いた静止ページだけ組む。
+                // 折りたたみ時は 172dp しか見えないのに全部組んでおり、ページ送りのたびに数十行＋3枚のチャートを作っていた
+                CandidatePage(app, inp, app.results[inp.key], app.failures[inp.key], expanded = expanded,
+                    detail = expanded && page == settledPage,
                     onExpand = { scope.launch { sheet.bottomSheetState.expand() } })
             }
         }
@@ -245,18 +246,9 @@ private fun SearchBar(app: AppState, kind: Kind, onKind: (Kind) -> Unit) {
     }
 }
 
-/** 送り中の通過ページ。カードの高さだけ確保し、住所を出す */
-@Composable
-private fun LightPage(inp: Input) {
-    Column(Modifier.fillMaxWidth().height(140.dp).padding(horizontal = 16.dp)) {
-        Text(inp.address, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(inp.kind.short, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
 /** シートの1ページ。上部がカード（折りたたみ時に見える部分）、その下に詳細が続く */
 @Composable
-private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: String?, expanded: Boolean, onExpand: () -> Unit) {
+private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: String?, expanded: Boolean, detail: Boolean, onExpand: () -> Unit) {
     val ctx = LocalContext.current
     var confirmRemove by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
@@ -301,7 +293,7 @@ private fun CandidatePage(app: AppState, inp: Input, c: Candidate?, failure: Str
         }
         if (!expanded) TextButton(onExpand, Modifier.align(Alignment.CenterHorizontally)) { Text("詳細を見る ▲") }
         // ---- 詳細 ----
-        if (c != null) {
+        if (c != null && detail) {
             Spacer(Modifier.height(8.dp))
             DetailContent(app, c)
         }

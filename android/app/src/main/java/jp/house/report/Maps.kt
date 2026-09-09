@@ -58,14 +58,21 @@ private fun renderAreas(areas: List<MapArea>, center: LatLng): AreaImage? {
         if (lo < minLon) minLon = lo; if (lo > maxLon) maxLon = lo; n++
     } }
     if (n == 0 || maxLat <= minLat || maxLon <= minLon) return null
+    // 描くのは中心から AROUND_M の円だけなので、画像の範囲もその外接矩形に切る。
+    // 取得範囲はタイル単位（地点がタイル端なら片側だけ1枚分広い）で、以前はその全域を確保し大半が透明だった
+    val dLat = AROUND_M / 110540.0
+    val dLon = AROUND_M / (111320.0 * cos(Math.toRadians(center.latitude)).coerceAtLeast(0.2))
+    minLat = maxOf(minLat, center.latitude - dLat); maxLat = minOf(maxLat, center.latitude + dLat)
+    minLon = maxOf(minLon, center.longitude - dLon); maxLon = minOf(maxLon, center.longitude + dLon)
+    if (maxLat <= minLat || maxLon <= minLon) return null
     val wM = (maxLon - minLon) * 111320 * cos(Math.toRadians((minLat + maxLat) / 2))
     val hM = (maxLat - minLat) * 110540
     if (wM <= 0 || hM <= 0) return null
-    val w = 2048
-    val h = (w * hM / wM).toInt().coerceIn(64, 2048)
+    // 1024px で直径2kmを覆う（約2m/px）。2048px だと1枚最大16MBで、ページ送りのたびに確保・破棄していた
+    val w = 1024
+    val h = (w * hM / wM).toInt().coerceIn(64, 1024)
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
-    // 取得範囲はタイル単位（地点がタイル端なら片側だけ1枚分広い）なので、描くのは円の内側だけにする
     val cx = ((center.longitude - minLon) / (maxLon - minLon) * w).toFloat(); val cy = ((maxLat - center.latitude) / (maxLat - minLat) * h).toFloat()
     val rx = (AROUND_M / wM * w).toFloat(); val ry = (AROUND_M / hM * h).toFloat()
     canvas.clipPath(Path().apply { addOval(RectF(cx - rx, cy - ry, cx + rx, cy + ry), Path.Direction.CW) })
@@ -208,10 +215,11 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
     val areas = c.map.areas.filter { it.label in on && it.label !in ov.wide } + on.flatMap { ov.wide[it].orEmpty() }
     // フィルは1枚に焼いて出す。内容が変わった時だけ裏スレッドで作り直す（タップ判定はベクタのまま areaAt で行う）
     var areaImg by remember { mutableStateOf<AreaImage?>(null) }
-    // 円で切るので中心が変われば同じ区域列でも描き直す（近接した物件同士は区域列が一致しうる）
+    // 円で切るので中心が変われば同じ区域列でも描き直す（近接した物件同士は区域列が一致しうる）。
+    // 差し替え時に旧ビットマップを即 recycle すると、Maps SDK がまだ参照していて「Canvas: trying to use a
+    // recycled bitmap」で落ちる。BitmapDescriptor 生成後は SDK 側が内容を保持するので、GC に任せて破棄しない
     LaunchedEffect(areas, here) {
-        val img = withContext(Dispatchers.Default) { renderAreas(areas, here) }
-        val old = areaImg; areaImg = img; old?.bmp?.recycle()
+        areaImg = withContext(Dispatchers.Default) { renderAreas(areas, here) }
     }
     areaImg?.let { (bmp, bounds) ->
         val desc = remember(bmp) { BitmapDescriptorFactory.fromBitmap(bmp) }
