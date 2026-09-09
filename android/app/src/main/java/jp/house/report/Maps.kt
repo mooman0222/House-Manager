@@ -36,6 +36,8 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.cos
@@ -124,6 +126,8 @@ class Overlay {
     var onPins by mutableStateOf<Set<String>?>(null)
     var picked by mutableStateOf<MapArea?>(null)
     val wide = mutableStateMapOf<String, List<MapArea>>()
+    /** 取得中の層ラベル。二重に走らせないための印 */
+    var loading by mutableStateOf<Set<String>>(emptySet())
     fun areaLabels(c: Candidate) = (c.map.areas.map { it.label } + POLY_LAYERS.filter { it.all }.map { it.label }).distinct()
     fun pinCats(c: Candidate) = c.map.pins.map { it.category }.distinct()
     fun areasOn(c: Candidate) = onAreas ?: c.map.areas.filter { it.level != Level.INFO }.map { it.label }.toSet()
@@ -135,20 +139,38 @@ fun rememberOverlay(c: Candidate, app: AppState): Overlay {
     val ctx = LocalContext.current
     // 候補を切り替えるたび作り直すと層ON/OFF・周辺取得結果がリセットされるため、AppState側に保持する
     val ov = remember(c.input.key) { app.overlays.getOrPut(c.input.key) { Overlay() } }
-    val reinfoKey = app.reinfoKey
-    // 周辺8タイルの追加取得は調査完了後に。途中の区域一覧で絞ると取りこぼす
-    LaunchedEffect(c.input.key, reinfoKey, c.done) {
-        if (reinfoKey.isBlank() || !c.done) return@LaunchedEffect
-        val lib = Lib(reinfoKey.trim(), c.geo.lat, c.geo.lon, tilesDir(ctx))
-        snapshotFlow { ov.areasOn(c) }.collect { on ->
-            val targets = POLY_LAYERS.filter { it.wide && it.label in on && it.label !in ov.wide }
-            if (targets.isEmpty()) return@collect
-            val keeps = targets.associate { l -> l.label to c.map.areas.filter { it.label == l.label }.map { it.summary }.toSet() }
-            val got = try { withContext(Dispatchers.IO) { layerAreasMulti(lib, targets, keeps) } } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
-            targets.forEach { l -> ov.wide[l.label] = got?.get(l.label) ?: c.map.areas.filter { it.label == l.label } }
-        }
+    // 周辺タイルの追加取得は調査完了後に（途中の区域一覧で絞ると取りこぼす）。
+    // 実行は AppState 側に任せ、ページを送っても途中で捨てずに完了・保存させる
+    LaunchedEffect(c.input.key, c.done) {
+        if (!c.done) return@LaunchedEffect
+        snapshotFlow { ov.areasOn(c) }.collect { on -> app.loadWide(c, ov, POLY_LAYERS.filter { it.wide && it.label in on && it.label !in ov.wide && it.label !in ov.loading }) }
     }
     return ov
+}
+
+/**
+ * 周辺区域を用意する。保存済みならファイルから、無ければタイルを取得して保存する。
+ * 1件ずつ直列に処理し、高速にページ送りしても取得・解析が同時に走らないようにする。
+ */
+fun AppState.loadWide(c: Candidate, ov: Overlay, targets: List<PolyLayer>) {
+    if (targets.isEmpty() || reinfoKey.isBlank()) return
+    ov.loading += targets.map { it.label }
+    scope.launch {
+        try {
+            wideGate.withLock {
+                val stored = withContext(Dispatchers.IO) { ResultStore.loadWide(ctx, c.input.key) }
+                stored.forEach { (l, a) -> if (l !in ov.wide) ov.wide[l] = a }
+                val rest = targets.filter { it.label !in ov.wide }
+                if (rest.isNotEmpty()) {
+                    val keeps = rest.associate { l -> l.label to c.map.areas.filter { it.label == l.label }.map { it.summary }.toSet() }
+                    val lib = Lib(reinfoKey, c.geo.lat, c.geo.lon, tilesDir(ctx))
+                    val got = try { withContext(Dispatchers.IO) { layerAreasMulti(lib, rest, keeps) } } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+                    rest.forEach { l -> ov.wide[l.label] = got?.get(l.label) ?: c.map.areas.filter { it.label == l.label } }
+                    if (got != null) withContext(Dispatchers.IO) { ResultStore.saveWide(ctx, c.input.key, ov.wide.toMap()) }
+                }
+            }
+        } finally { ov.loading -= targets.map { it.label }.toSet() }
+    }
 }
 
 /** 表示中の区域のうち、タップ地点を含むもの（後に描かれたものを優先） */

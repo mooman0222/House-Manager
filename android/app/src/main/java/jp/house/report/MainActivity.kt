@@ -93,6 +93,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val mapCamera = CameraPositionState(CameraPosition.fromLatLngZoom(LatLng(35.681, 139.767), 11f))
     /** 地図オーバーレイの表示状態（層ON/OFF・タップ選択・周辺取得結果）を候補ごとに保持。切替でリセットされないようにする */
     val overlays = mutableMapOf<String, Overlay>()
+    /** 周辺区域の取得を1件ずつにする */
+    val wideGate = kotlinx.coroutines.sync.Mutex()
 
     // 調査は1件ずつ。実行中は queue に並べ、終わったら次を始める。削除されたらキャンセルする
     private var running: Pair<String, Job>? = null
