@@ -35,7 +35,6 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberMarkerState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -102,14 +101,15 @@ fun HomeScreen(app: AppState) {
     val camera = app.mapCamera
     // 地図キー無しでは Maps SDK が未初期化のため CameraUpdateFactory が NPE になる。地図表示時のみ追従する
     val hasMap = mapsKey(ctx).isNotBlank()
-    // 地図の追従はページ静止後に限定する。スワイプ途中の通過ページで作り直すと重い
-    var mapKey by remember { mutableStateOf(app.selected) }
-    LaunchedEffect(pager.currentPage, candidates.size) {
-        delay(250)
-        mapKey = candidates.getOrNull(pager.currentPage)?.key
+    // 地図が向く候補は静止ページから一本で導く。以前はピンの onClick が mapKey を直接書き、
+    // 直後にページ送りの遅延書き込みが上書きして、カメラ移動が二重に走っていた
+    val mapCand = settled?.let { app.results[it.key] } ?: cur
+    // animate は内部で移動権のロックを取る suspend 関数。エフェクトを1本に保ち、重複起動で取り合わせない
+    LaunchedEffect(mapCand?.geo, hasMap) {
+        val g = mapCand?.geo ?: return@LaunchedEffect
+        if (!hasMap) return@LaunchedEffect
+        camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(g.lat, g.lon), 14f))
     }
-    val mapCand = mapKey?.let { app.results[it] } ?: cur
-    LaunchedEffect(mapCand?.geo, hasMap) { if (hasMap) mapCand?.geo?.let { camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(it.lat, it.lon), 14f)) } }
     val ov = mapCand?.let { rememberOverlay(it, app) }
     // 地図タップで選んだ地点。住所が取れたらカードで確認してから候補に追加する
     var pick by remember { mutableStateOf<LatLng?>(null) }
@@ -163,8 +163,9 @@ fun HomeScreen(app: AppState) {
                         val icon = remember(hue) { BitmapDescriptorFactory.defaultMarker(hue) }
                         Marker(state = rememberMarkerState(position = LatLng(c.geo.lat, c.geo.lon)), title = inp.address, snippet = "安全 ${c.safety.word()} / 暮らし ${c.living.word()} / 価格 ${c.price.word()}",
                             icon = icon, zIndex = if (inp.key == app.selected) 2f else 1f,
-                            // 地図も即時に向け直す。ページ到達待ちだと古い行き先への移動が後に終わって見える
-                            onClick = { if (app.selected != inp.key) { app.selected = inp.key; mapKey = inp.key }; false })
+                            // true を返して SDK の既定動作を止める。false だと SDK 自身のカメラ移動が
+                            // こちらの animate と移動権を取り合い、以後の操作がずっと重くなる
+                            onClick = { app.selected = inp.key; true })
                     }
                 }
                 if (mapCand != null && ov != null) CandidateOverlay(mapCand, ov)
