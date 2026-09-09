@@ -85,8 +85,18 @@ fun HomeScreen(app: AppState) {
         if (autoScrolling) return@LaunchedEffect
         candidates.getOrNull(pager.currentPage)?.let { app.selected = it.key }
     }
-    // 表示中の候補が未調査なら自動で調べる（失敗したものは再試行ボタンに任せる）
-    LaunchedEffect(current?.key, app.status) { current?.let { if (app.results[it.key] == null && it.key !in app.failures && app.status.isEmpty() && app.key.isNotBlank()) app.run(it) } }
+    // 中身を出すページ。スクロール・自動送りが終わってから確定する
+    var settledPage by remember { mutableStateOf(pager.currentPage) }
+    LaunchedEffect(pager, candidates.size) {
+        // 候補が減って現在ページが繰り上がる場合も含め、静止時の実ページに合わせる
+        snapshotFlow { pager.isScrollInProgress to pager.currentPage }.collect { (scrolling, page) ->
+            if (!scrolling) settledPage = page
+        }
+    }
+    // 表示中の候補が未調査なら自動で調べる（失敗したものは再試行ボタンに任せる）。
+    // 送り中の通過ページでは始めない（数件分の調査が順番待ちに積まれる）
+    val settled = candidates.getOrNull(settledPage)
+    LaunchedEffect(settled?.key, app.status) { settled?.let { if (app.results[it.key] == null && it.key !in app.failures && app.status.isEmpty() && app.key.isNotBlank()) app.run(it) } }
 
     // カメラは app.mapCamera（タブ切替でも保持）。画面内で remember すると切替のたび初期位置に戻る
     val camera = app.mapCamera
@@ -123,7 +133,10 @@ fun HomeScreen(app: AppState) {
                 Text("上の検索バーに住所を入れるか、地図をタップして地点を選ぶと候補に追加できます。ポータルサイトの物件ページを共有メニューから送ることもできます。", style = MaterialTheme.typography.bodySmall)
             } else HorizontalPager(pager, Modifier.fillMaxWidth()) { page ->
                 val inp = candidates[page]
-                CandidatePage(app, inp, app.results[inp.key], app.failures[inp.key], expanded = sheet.bottomSheetState.currentValue == SheetValue.Expanded,
+                // 送り中に通過するページは住所だけの薄いカードにする。チャート・確認リスト・区域画像まで作ると
+                // ピンのタップで数件分の構成が一気に走り、引っかかりとメモリ圧の原因になる
+                if (page != settledPage) LightPage(inp)
+                else CandidatePage(app, inp, app.results[inp.key], app.failures[inp.key], expanded = sheet.bottomSheetState.currentValue == SheetValue.Expanded,
                     onExpand = { scope.launch { sheet.bottomSheetState.expand() } })
             }
         }
@@ -229,6 +242,15 @@ private fun SearchBar(app: AppState, kind: Kind, onKind: (Kind) -> Unit) {
             }
             if (err.isNotEmpty()) Text(err, color = C_BAD, style = MaterialTheme.typography.labelSmall)
         }
+    }
+}
+
+/** 送り中の通過ページ。カードの高さだけ確保し、住所を出す */
+@Composable
+private fun LightPage(inp: Input) {
+    Column(Modifier.fillMaxWidth().height(140.dp).padding(horizontal = 16.dp)) {
+        Text(inp.address, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(inp.kind.short, style = MaterialTheme.typography.bodySmall)
     }
 }
 
