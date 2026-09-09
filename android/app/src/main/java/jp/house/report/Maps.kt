@@ -208,7 +208,8 @@ fun CandidateOverlay(c: Candidate, ov: Overlay) {
     val areas = c.map.areas.filter { it.label in on && it.label !in ov.wide } + on.flatMap { ov.wide[it].orEmpty() }
     // フィルは1枚に焼いて出す。内容が変わった時だけ裏スレッドで作り直す（タップ判定はベクタのまま areaAt で行う）
     var areaImg by remember { mutableStateOf<AreaImage?>(null) }
-    LaunchedEffect(areas) {
+    // 円で切るので中心が変われば同じ区域列でも描き直す（近接した物件同士は区域列が一致しうる）
+    LaunchedEffect(areas, here) {
         val img = withContext(Dispatchers.Default) { renderAreas(areas, here) }
         val old = areaImg; areaImg = img; old?.bmp?.recycle()
     }
