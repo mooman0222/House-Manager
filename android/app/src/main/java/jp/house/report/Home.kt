@@ -57,7 +57,17 @@ fun HomeScreen(app: AppState) {
     // 外から選ばれた候補（検索・地図ピン・比較画面）にページを合わせる。
     // プログラム送り中は通過ページの書き戻しを全て抑止する（1件ずつ書き戻されて送り直し・巻き戻りになる）
     var autoScrolling by remember { mutableStateOf(false) }
-    LaunchedEffect(app.selected, candidates.size) {
+    // このタブが今回表示されてから一度でも送ったか。他タブから戻った直後の1回だけ
+    // アニメーションなしで合わせる（滑らせると最後の物件まで送ってから戻るように二度動いて見える）
+    var slid by remember { mutableStateOf(false) }
+    LaunchedEffect(app.selected, candidates.size, app.tab) {
+        if (app.tab != 0) { slid = false; return@LaunchedEffect } // 非表示中は幅0で送りが確定せず、選択と現在ページがずれたまま残る
+        if (!slid) {
+            slid = true
+            val i = candidates.indexOfFirst { it.key == app.selected }
+            if (i >= 0 && i != pager.currentPage) { autoScrolling = true; try { pager.scrollToPage(i) } finally { autoScrolling = false } }
+            return@LaunchedEffect
+        }
         var first = true
         while (true) {
             val i = candidates.indexOfFirst { it.key == app.selected }
@@ -80,8 +90,8 @@ fun HomeScreen(app: AppState) {
             }
         }
     }
-    LaunchedEffect(pager.currentPage) {
-        if (autoScrolling) return@LaunchedEffect
+    LaunchedEffect(pager.currentPage, app.tab) {
+        if (autoScrolling || app.tab != 0) return@LaunchedEffect
         candidates.getOrNull(pager.currentPage)?.let { app.selected = it.key }
     }
     // 中身を出すページ。スクロール・自動送りが終わってから確定する

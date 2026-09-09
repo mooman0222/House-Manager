@@ -262,6 +262,11 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
 /** タブの中身を破棄せず、非表示時はサイズ0にして当たり判定も消す */
 @Composable
 private fun TabKeep(visible: Boolean, content: @Composable () -> Unit) {
+    // 一度でも表示したら以後は破棄しない（地図やページャの状態を保つ）。
+    // ただし非表示中は幅0でページ送りが確定できず、選択が古いまま残るため、表示に切り替わるまでは組まない
+    var shown by remember { mutableStateOf(false) }
+    if (visible) shown = true
+    if (!shown) return
     Box(if (visible) Modifier.fillMaxSize() else Modifier.size(0.dp)) { content() }
 }
 
