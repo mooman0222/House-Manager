@@ -81,17 +81,18 @@ fun tile(lat: Double, lon: Double, z: Int): Pair<Int, Int> {
 }
 
 /**
- * 半径radiusMの円を覆うタイル列挙。中心タイル＋はみ出す隣接タイルのみ (最大3x3)。
- * 従来の around=1 固定 (9枚) を、中心付近なら1枚・境界付近でも最大4枚程度に減らす。
+ * 半径radiusMの円を覆うタイル列挙。中心タイル＋はみ出す隣接タイルのみで、上限は中心の周囲1周 (3x3)。
+ * 円がタイル幅より大きく4列に及ぶ時は中心から遠い側を落とす。先頭から3つ取ると中心が端に寄り、片側だけ1タイル分ずれる。
  */
 fun coverTiles(lat: Double, lon: Double, z: Int, radiusM: Double): List<Pair<Int, Int>> {
-    if (radiusM <= 0) return listOf(tile(lat, lon, z))
+    val (cx, cy) = tile(lat, lon, z)
+    if (radiusM <= 0) return listOf(cx to cy)
     val dLat = radiusM / 111320.0
     val dLon = radiusM / (111320.0 * cos(Math.toRadians(lat)).coerceAtLeast(0.2))
     val (x1, y1) = tile((lat - dLat).coerceIn(-85.0, 85.0), lon - dLon, z)
     val (x2, y2) = tile((lat + dLat).coerceIn(-85.0, 85.0), lon + dLon, z)
-    val xs = (min(x1, x2)..max(x1, x2)).take(3)
-    val ys = (min(y1, y2)..max(y1, y2)).take(3)
+    val xs = max(min(x1, x2), cx - 1)..min(max(x1, x2), cx + 1)
+    val ys = max(min(y1, y2), cy - 1)..min(max(y1, y2), cy + 1)
     return xs.flatMap { x -> ys.map { y -> x to y } }
 }
 

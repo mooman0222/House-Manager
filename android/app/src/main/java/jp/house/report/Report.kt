@@ -101,7 +101,7 @@ fun PolyLayer.item(hits: List<Pair<Level, String>>): Item {
     return Item(icon, label, lv, hits.map { it.second }.distinct().joinToString(" / "), detail)
 }
 
-/** 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルだけ広げ、keep と同じ区域の断片だけを拾う（all の層は全区画）。従来の周辺8タイル (9枚) から1〜4枚程度に削減。 */
+/** 地図用に半径1100m (表示の1km円＋余裕) を覆うタイルを取り、keep と同じ区域の断片だけを拾う（all の層は全区画）。z15 のタイル幅は約1kmなので、中心の周囲1周 (3x3) に収まる。 */
 fun layerAreas(lib: Lib, l: PolyLayer, keep: Set<String>): List<MapArea> =
     lib.multi(listOf(TileReq(l.api, 15, coverRadiusM = 1100.0))).values.firstOrNull().orEmpty().flatMap { ft ->
         val (lv, summary) = l.f(ft.getJSONObject("properties"))
