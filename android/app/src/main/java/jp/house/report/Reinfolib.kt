@@ -66,7 +66,7 @@ data class Geo(val lat: Double, val lon: Double, val title: String)
 
 fun geocode(addr: String): Geo {
     val res = httpJson("https://msearch.gsi.go.jp/address-search/AddressSearch?q=" + enc(addr)) as JSONArray
-    if (res.length() == 0) throw ApiError("住所が見つかりませんの: $addr")
+    if (res.length() == 0) throw ApiError("住所が見つかりません: $addr")
     val f = res.getJSONObject(0)
     val c = f.getJSONObject("geometry").getJSONArray("coordinates")
     return Geo(c.getDouble(1), c.getDouble(0), f.getJSONObject("properties").getString("title"))
