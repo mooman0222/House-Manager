@@ -2,6 +2,7 @@ package jp.house.report
 
 import android.content.Context
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Capabilities
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
@@ -11,7 +12,6 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
-import com.google.ai.edge.litertlm.ToolProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -102,10 +102,18 @@ object Llm {
         return Engine(EngineConfig(modelPath = m.file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = n)).also { it.initialize(); engine = it; engineModel = m.id; engineTokens = n }
     }
 
-    /** tools を渡すとモデルが必要に応じて呼び出し、結果を踏まえて答える（自動ツール呼び出し） */
-    fun chat(ctx: Context, system: String, temperature: Double = 1.0, tools: List<ToolProvider> = emptyList()): Conversation = engine(ctx).createConversation(
+    /** モデルファイルがツール呼び出しに対応しているか。ランタイムがモデルのメタデータを見て答える */
+    fun supportsTools(ctx: Context): Boolean = runCatching {
+        Capabilities(model(ctx).file(ctx).path).use { it.supportsFunctionCalling() }
+    }.getOrDefault(false)
+
+    /**
+     * tools を渡すと、その宣言を system の末尾に足す。呼び出しの検出と実行は runWithTools が行う。
+     * ランタイムの ConversationConfig(tools=) は Gemma 4 では機能しないため使わない（理由は ToolLoop.kt）。
+     */
+    fun chat(ctx: Context, system: String, temperature: Double = 1.0, tools: List<LocalTool> = emptyList()): Conversation = engine(ctx).createConversation(
         // thinking は Qwen3 が既定で有効。長い思考の出力を抑え、応答だけ返させる
-        ConversationConfig(systemInstruction = Contents.of(system), tools = tools, samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature), thinkingConfig = ThinkingConfig(enableThinking = false))
+        ConversationConfig(systemInstruction = Contents.of(system + if (tools.isEmpty()) "" else tools.declare()), samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = temperature), thinkingConfig = ThinkingConfig(enableThinking = false))
     )
 
     /** 曖昧な住所を正式表記に直す。直せなければ null。 */

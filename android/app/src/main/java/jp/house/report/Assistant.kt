@@ -24,6 +24,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /** 全体アシスタントの前置き。調査済みの物件はすべて要約を渡し、未調査は名前だけ知らせる。 */
@@ -57,7 +58,7 @@ class ChatState(val scope: CoroutineScope) {
 }
 
 @Composable
-fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (Context) -> Conversation, modifier: Modifier = Modifier) {
+fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (Context) -> Conversation, modifier: Modifier = Modifier, tools: List<LocalTool> = emptyList()) {
     val ctx = LocalContext.current
     if (!Llm.ready(ctx)) {
         Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -97,7 +98,19 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
                         state.conv?.takeIf { it.getTokenCount() > Llm.maxTokens(ctx) * 0.8 }?.let { state.close() }
                         val cv = state.conv ?: makeConv(ctx).also { state.conv = it }
                         state.busy = "考え中…"
-                        cv.sendMessageAsync(q).collect { m -> log[log.lastIndex] = false to log.last().second + m.text } // 差分が届く
+                        // ツールを呼ぶ間は生成が複数回に分かれる。吹き出しは毎回頭から書き直す
+                        runWithTools(q, tools) { msg ->
+                            val raw = StringBuilder()
+                            runBlocking {
+                                cv.sendMessageAsync(msg).collect { m -> // 差分が届く
+                                    raw.append(m.text)
+                                    // ツール記法は画面に出さない。呼び出し中は「調べています…」を見せる
+                                    state.busy = if ("<|tool_call>" in raw) "調べています…" else "考え中…"
+                                    log[log.lastIndex] = false to stripCalls(raw.toString())
+                                }
+                            }
+                            raw.toString()
+                        }
                     } finally { Llm.gate.release() }
                 }
             } catch (e: CancellationException) { throw e

@@ -1,9 +1,6 @@
 package jp.house.report
 
 import android.util.Log
-import com.google.ai.edge.litertlm.Tool
-import com.google.ai.edge.litertlm.ToolParam
-import com.google.ai.edge.litertlm.ToolSet
 import java.io.File
 import java.time.LocalDate
 
@@ -11,31 +8,41 @@ import java.time.LocalDate
  * 端末内 LLM から呼べる不動産情報ライブラリのツール。mlit-geospatial-mcp が MCP で公開しているのと同じ API を、
  * アプリ内の Lib 経由で直接叩く（Android では stdio の MCP サーバーを起動できないため）。
  * 小さなモデルでも選びやすいよう、引数は住所1つに絞り、結果は読み上げ用のプレーンテキストで返す。
+ *
+ * 呼び出しの検出は ToolLoop 側で自前に行う（LiteRT-LM の tools= はこのモデルでは機能しない。理由は ToolLoop.kt）。
  */
-class ReinfoTools(private val key: String, private val cacheDir: File) : ToolSet {
-    private fun lib(address: String): Lib {
+fun reinfoTools(key: String, cacheDir: File): List<LocalTool> {
+    fun lib(address: String): Lib {
         Log.i("ReinfoTools", "call address=$address") // 実機でツールが呼ばれたか logcat で追えるように
         if (key.isBlank()) throw ApiError("不動産情報ライブラリの API キーが未設定です。設定画面で入力してください")
         val g = geocode(address)
         return Lib(key, g.lat, g.lon, cacheDir)
     }
 
-    @Tool(description = "住所を指定して、その地点の災害リスク（洪水・高潮・津波・土砂災害・液状化など）、建築条件（用途地域・防火地域・地区計画）、小中学校区を調べる。調査結果に無い住所について聞かれた時に使う")
-    fun lookupArea(@ToolParam(description = "日本の住所。例: 東京都千代田区丸の内1丁目") address: String): String = try {
-        val L = lib(address)
-        val feats = L.hereAll(POLY_LAYERS.map { it.api })
-        POLY_LAYERS.joinToString("\n") { l -> val it = l.item(l.hits(feats[l.api].orEmpty())); "${it.label}: ${it.summary}" }
-    } catch (e: Exception) { "調べられませんでした: ${e.message}" }
-
-    @Tool(description = "住所を指定して、周辺1km以内の公示地価・都道府県地価調査の標準地（円/㎡）を近い順に最大5件調べる")
-    fun landPrice(@ToolParam(description = "日本の住所。例: 東京都千代田区丸の内1丁目") address: String): String = try {
-        val L = lib(address)
-        val year = LocalDate.now().year
-        // 当年分は毎年3月頃に公開される。まだ無ければ前年で引く
-        val pts = (year downTo year - 1).firstNotNullOfOrNull { y -> L.near("XPT002", 1000.0, mapOf("year" to "$y")).takeIf { it.isNotEmpty() } }
-        if (pts == null) "周辺1km以内に地価公示・地価調査の標準地がありません"
-        else pts.take(5).joinToString("\n") { (d, p) ->
-            "${p.s("target_year_name_ja")} ${p.s("location_number_ja")} ${d}m: ${p.s("u_current_years_price_ja")}（${p.s("use_category_name_ja")}、${p.s("nearest_station_name_ja")}駅 ${p.s("u_road_distance_to_nearest_station_name_ja")}）"
-        }
-    } catch (e: Exception) { "調べられませんでした: ${e.message}" }
+    val addr = "日本の住所。例: 東京都千代田区丸の内1丁目"
+    return listOf(
+        LocalTool(
+            "lookupArea",
+            "住所を指定して、その地点の災害リスク（洪水・高潮・津波・土砂災害・液状化など）、建築条件（用途地域・防火地域・地区計画）、小中学校区を調べる。調査結果に無い住所について聞かれた時に使う",
+            "address", addr,
+        ) { address ->
+            val L = lib(address)
+            val feats = L.hereAll(POLY_LAYERS.map { it.api })
+            POLY_LAYERS.joinToString("\n") { l -> val it = l.item(l.hits(feats[l.api].orEmpty())); "${it.label}: ${it.summary}" }
+        },
+        LocalTool(
+            "landPrice",
+            "住所を指定して、周辺1km以内の公示地価・都道府県地価調査の標準地（円/㎡）を近い順に最大5件調べる",
+            "address", addr,
+        ) { address ->
+            val L = lib(address)
+            val year = LocalDate.now().year
+            // 当年分は毎年3月頃に公開される。まだ無ければ前年で引く
+            val pts = (year downTo year - 1).firstNotNullOfOrNull { y -> L.near("XPT002", 1000.0, mapOf("year" to "$y")).takeIf { it.isNotEmpty() } }
+            if (pts == null) "周辺1km以内に地価公示・地価調査の標準地がありません"
+            else pts.take(5).joinToString("\n") { (d, p) ->
+                "${p.s("target_year_name_ja")} ${p.s("location_number_ja")} ${d}m: ${p.s("u_current_years_price_ja")}（${p.s("use_category_name_ja")}、${p.s("nearest_station_name_ja")}駅 ${p.s("u_road_distance_to_nearest_station_name_ja")}）"
+            }
+        },
+    )
 }

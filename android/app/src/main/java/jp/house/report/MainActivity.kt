@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import com.google.ai.edge.litertlm.tool
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -249,7 +248,9 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
             TabKeep(app.tab == 0) { HomeScreen(app) }
             TabKeep(app.tab == 1) { CompareScreen(app) }
             TabKeep(app.tab == 2) { ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
-                listOf("調査した物件を比較して"), { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = listOf(tool(ReinfoTools(app.reinfoKey, tilesDir(c))))) }, Modifier.fillMaxSize()) }
+                listOf("調査した物件を比較して"),
+                { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = reinfoTools(app.reinfoKey, tilesDir(c))) },
+                Modifier.fillMaxSize(), reinfoTools(app.reinfoKey, tilesDir(ctx))) }
             TabKeep(app.tab == 3) { SettingsScreen(app) }
             // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
             if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },
