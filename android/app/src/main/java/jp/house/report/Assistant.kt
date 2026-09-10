@@ -27,15 +27,56 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
-/** 全体アシスタントの前置き。調査済みの物件はすべて要約を渡し、未調査は名前だけ知らせる。 */
-fun assistantSystem(analyzed: Collection<Candidate>, unanalyzed: List<Input>) = buildString {
+/**
+ * 前置きに使ってよい文字数。物件が増えても上限に当たらないよう、会話の上限トークンから逆算する。
+ * 日本語は概ね 1〜1.5 文字/トークンなので、安全側に 1 文字 = 1 トークンで見積もる。
+ * 残りは履歴と生成に空けておく（前置きで埋め切ると1往復もできない）。
+ */
+fun systemBudget(maxTokens: Int) = maxTokens * 6 / 10
+
+/**
+ * 全体アシスタントの前置き。調査済みの物件は予算に収まるだけ要約を渡し、
+ * 溢れた分と未調査は住所だけ知らせる（詳細はツールで引ける）。
+ * [budget] を超える物件は落とすので、優先したいものを [analyzed] の先頭に置くこと。
+ */
+fun assistantSystem(analyzed: Collection<Candidate>, unanalyzed: List<Input>, budget: Int = Int.MAX_VALUE) = buildString {
     append("あなたは住宅購入を検討する人を支援する不動産アドバイザーです。根拠は、以下の調査結果と、ツールで調べた結果の2つです。比較や質問に日本語で簡潔に答えてください。")
     append("調査結果に無い住所について災害リスク・建築条件・学区を聞かれたら必ず lookupArea を、公示地価や地価を聞かれたら必ず landPrice を呼び、その結果を根拠に答えてください。ツールで調べられないことは推測せず「調査結果にはありません」と答えてください。")
     append("物件を候補に追加してほしい・この住所を調べてほしいと頼まれたら addProperty を呼んでください。種別や価格は指定できないので、必要なら地図タブのカードから直すよう伝えてください。")
     append("出力はプレーンテキストで、Markdown 記法（**、#、- などの記号）は使わず、箇条書きは「・」で始めてください。\n\n")
     if (analyzed.isEmpty()) append("調査済みの物件はまだありません。住所を聞かれたらツールで調べて答え、物件の比較を求められたら「探す」画面で住所を調べるよう案内してください。\n")
-    analyzed.forEachIndexed { i, c -> append("【物件${i + 1}】\n"); append(c.digest()); append("\n") }
-    if (unanalyzed.isNotEmpty()) append("保存済みだが未調査の物件（比べる画面で読み込むと使えます）: " + unanalyzed.joinToString("、") { it.address })
+    // 予算に収まる分だけ詳細を積む。溢れたら住所だけにして、詳細が要る時はツールで引かせる。
+    // 末尾の住所一覧に要る分は、何件省くかが決まらないと分からない。
+    // そこで「i 件目まで詳細にしたら、残りの住所を並べても収まるか」を前から順に判定する
+    val digests = analyzed.map { it.digest() }
+    val addrs = analyzed.map { it.input.address }
+    val unTail = if (unanalyzed.isEmpty()) 0 else unanalyzed.sumOf { it.address.length + 1 } + 40
+    var take = 0
+    var used = length
+    for (i in digests.indices) {
+        val d = ("【物件${i + 1}】\n" + digests[i] + "\n").length
+        // 残り（i+1 件目以降）を住所だけ並べた時の長さ。省略が無ければ 0
+        val rest = addrs.drop(i + 1).sumOf { it.length + 1 }.let { if (it == 0) 0 else it + 60 }
+        if (used + d + rest + unTail > budget) break
+        used += d; take = i + 1
+    }
+    digests.take(take).forEachIndexed { i, d -> append("【物件${i + 1}】\n").append(d).append("\n") }
+    val omitted = addrs.drop(take)
+    if (omitted.isNotEmpty()) appendList("詳細を省いた調査済みの物件（住所を指定して lookupArea や landPrice で調べられます）", omitted, budget)
+    if (unanalyzed.isNotEmpty()) appendList("保存済みだが未調査の物件（比べる画面で読み込むと使えます）", unanalyzed.map { it.address }, budget)
+}
+
+/** 住所の一覧を足す。予算を超える分は件数だけ伝える（物件が何百件あっても前置きが破綻しないように） */
+private fun StringBuilder.appendList(label: String, addrs: List<String>, budget: Int) {
+    append(label).append(": ")
+    var n = 0
+    for (a in addrs) {
+        if (length + a.length + 30 > budget) break
+        if (n > 0) append("、")
+        append(a); n++
+    }
+    if (n < addrs.size) append("ほか${addrs.size - n}件")
+    append("\n")
 }
 
 /** 表示は素の Text なので、残った Markdown 記号だけ落とす */

@@ -88,6 +88,16 @@ class AppState(application: Application) : AndroidViewModel(application) {
     /** 保存済み + 調査済み（未保存）を、保存順で */
     val candidates: List<Input> get() = (saved + results.values.map { it.input }).distinctBy { it.key }
 
+    /**
+     * AI の前置きに渡す調査済み物件。予算を超えた分は住所だけになるので、
+     * 選択中を先頭、あとは新しい順（保存順の逆）に並べ、落とすなら古いものからにする。
+     */
+    val chatCandidates: List<Candidate> get() {
+        val done = candidates.reversed().mapNotNull { results[it.key]?.takeIf { c -> c.done } }
+        val sel = selected?.let { k -> done.firstOrNull { it.input.key == k } } ?: return done
+        return listOf(sel) + done.filter { it !== sel }
+    }
+
     /** 地図カメラ。タブ切替で地図画面が作り直されても位置・ズームを保つためViewModel側に持つ */
     val mapCamera = CameraPositionState(CameraPosition.fromLatLngZoom(LatLng(35.681, 139.767), 11f))
     /** 地図オーバーレイの表示状態（層ON/OFF・タップ選択・周辺取得結果）を候補ごとに保持。切替でリセットされないようにする */
@@ -241,7 +251,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
 fun App(sharedText: String?, onSharedHandled: () -> Unit) {
     val ctx = LocalContext.current
     val app: AppState = viewModel()
-    LaunchedEffect(app.results.keys.toSet()) { app.chat.invalidate() }
+    // 結果が増減した時に加え、選択が変わった時も作り直す（前置きは選択中を先頭に積むため）
+    LaunchedEffect(app.results.keys.toSet(), app.selected) { app.chat.invalidate() }
     LaunchedEffect(sharedText) { if (sharedText != null) { app.tab = 0; app.importing = true; try { app.pendingImport = importListing(ctx, sharedText) } finally { app.importing = false }; onSharedHandled() } }
 
     Scaffold(bottomBar = {
@@ -261,7 +272,7 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
                 val chatTools = remember(app.reinfoKey) { reinfoTools(app.reinfoKey, tilesDir(ctx)) + addPropertyTool(app) }
                 ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。物件の追加も頼めます。回答は参考情報で、正確性は保証されません。",
                     listOf("調査した物件を比較して"),
-                    { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = chatTools) },
+                    { c -> Llm.chat(c, assistantSystem(app.chatCandidates, app.saved.filter { app.results[it.key]?.done != true }, systemBudget(Llm.maxTokens(c))), tools = chatTools) },
                     Modifier.fillMaxSize(), chatTools)
             }
             TabKeep(app.tab == 3) { SettingsScreen(app) }

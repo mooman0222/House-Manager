@@ -102,6 +102,9 @@ object Llm {
         return Engine(EngineConfig(modelPath = m.file(ctx).path, backend = Backend.CPU(), cacheDir = ctx.cacheDir.path, maxNumTokens = n)).also { it.initialize(); engine = it; engineModel = m.id; engineTokens = n }
     }
 
+    /** エンジンを解放する。次に engine() を呼ぶと作り直す */
+    @Synchronized fun close() { engine?.close(); engine = null; engineModel = null; engineTokens = 0 }
+
     /** モデルファイルがツール呼び出しに対応しているか。ランタイムがモデルのメタデータを見て答える */
     fun supportsTools(ctx: Context): Boolean = runCatching {
         Capabilities(model(ctx).file(ctx).path).use { it.supportsFunctionCalling() }
@@ -131,16 +134,27 @@ object Llm {
 
 val Message.text: String get() = contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
 
-/** LLM に渡す調査結果の要約 */
+/**
+ * LLM に渡す調査結果の要約。物件が増えると前置きが上限を食い潰すので、回答の根拠になる情報だけ残す:
+ * 該当のない項目はまとめて1行、成約は明細を出さず中央値と目安価格だけにする（明細は聞かれてから引ける）。
+ */
 fun Candidate.digest(): String = buildString {
     appendLine("物件: ${input.address}（${geo.title}） 種別: ${input.kind.label}")
     listOfNotNull(input.price?.let { "価格 %.0f万円".format(it) }, input.area?.let { "面積 %.0f㎡".format(it) }, input.built?.let { "築年 ${it}年" }).takeIf { it.isNotEmpty() }?.let { appendLine(it.joinToString(" / ")) }
-    sections.forEach { s -> appendLine("■${s.title}"); s.items.forEach { appendLine("- ${it.label}: ${it.summary}") } }
+    sections.forEach { s ->
+        // 「該当なし」「データなし」「指定なし」は1件ずつ行を使う価値がないので、末尾に名前だけ並べる
+        val (none, hit) = s.items.partition { it.summary in NO_HIT }
+        appendLine("■${s.title}")
+        hit.forEach { appendLine("- ${it.label}: ${it.summary}") }
+        if (none.isNotEmpty()) appendLine("- 該当なし: " + none.joinToString("、") { it.label })
+    }
     prices?.let { p ->
         appendLine("■${p.scope}の成約（直近2年 ${p.units.size}件）: ㎡単価中央値 %.1f万円、${p.simNote}、その中央値 %.1f万円".format(p.median / 1e4, p.simMedian / 1e4))
         p.myUnit?.let { appendLine("- この物件の㎡単価 %.1f万円（近い条件の中央値比 %+.0f%%）".format(it / 1e4, (it / p.simMedian - 1) * 100)) }
         p.range?.let { (lo, hi) -> appendLine("- 目安価格 %,.0f〜%,.0f万円".format(lo, hi)) }
-        p.deals.take(8).forEach { appendLine("- ${it.district} ${it.time} ${it.category} ${it.price} ${it.spec}") }
     }
     pop?.takeIf { it.values.size >= 2 }?.let { appendLine("■将来推計人口（周辺250mメッシュ）: ${it.labels.first()}年 ${it.values.first().toInt()}人 → ${it.labels.last()}年 ${it.values.last().toInt()}人") }
 }
+
+/** 情報量が無く、まとめて良い summary。PolyLayer の none 既定値に対応する */
+private val NO_HIT = setOf("該当なし", "データなし", "指定なし")
