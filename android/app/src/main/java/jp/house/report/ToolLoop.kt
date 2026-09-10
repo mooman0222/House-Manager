@@ -13,8 +13,11 @@ import android.util.Log
  * そこで定義は system に自分で書き、出力からこの形式を自分で拾って呼ぶ。
  */
 
-/** 端末内 LLM から呼べる関数1つ。引数は住所など文字列1つに絞る（小さいモデルでも選び間違えにくい） */
-class LocalTool(val name: String, val desc: String, val argName: String, val argDesc: String, val run: (String) -> String)
+/**
+ * 端末内 LLM から呼べる関数1つ。引数は住所など文字列1つに絞る（小さいモデルでも選び間違えにくい）。
+ * [doing] は実行中に画面へ出す短い動詞句（例: 災害リスクを調べています）。
+ */
+class LocalTool(val name: String, val desc: String, val argName: String, val argDesc: String, val doing: String, val run: (String) -> String)
 
 /**
  * ツール定義。system の末尾に置く。
@@ -59,9 +62,16 @@ internal fun toolResponse(name: String, result: String) =
 /**
  * 1往復。ツールが呼ばれたら実行して結果を返し、その続きを生成させる。
  * [send] は1メッセージ送って全文を返す関数（会話は呼び出し側が持つ）。
+ * [onTool] は実行の直前に呼ぶ（画面に「〜を調べています」を出すため。null は実行が終わった合図）。
  * ponytail: ツールは1ターンにつき最大 [maxHops] 回。多段の調査が要るならここを増やす
  */
-fun runWithTools(question: String, tools: List<LocalTool>, maxHops: Int = 3, send: (String) -> String): String {
+fun runWithTools(
+    question: String,
+    tools: List<LocalTool>,
+    maxHops: Int = 3,
+    onTool: (LocalTool?, String) -> Unit = { _, _ -> },
+    send: (String) -> String,
+): String {
     var msg = question
     repeat(maxHops) {
         val out = send(msg)
@@ -69,10 +79,12 @@ fun runWithTools(question: String, tools: List<LocalTool>, maxHops: Int = 3, sen
         if (calls.isEmpty()) return out
         msg = calls.joinToString("") { (name, arg) ->
             val t = tools.firstOrNull { it.name == name }
+            onTool(t, arg) // 実行の直前に知らせる（1件ずつ、進捗の文言を差し替えるため）
             val r = if (t == null) "そのツールはありません" else runCatching { t.run(arg) }.getOrElse { "調べられませんでした: ${it.message}" }
             Log.i("ToolLoop", "$name($arg) -> ${r.take(80)}")
             toolResponse(name, r)
         }
+        onTool(null, "") // 全部終わった
     }
     // 打ち切り: 最後にツール無しで答えさせる
     return send("これまでの調査結果だけで、日本語で簡潔に答えてください。")

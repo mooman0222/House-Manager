@@ -50,15 +50,20 @@ class LlmTest {
         Log.i("LlmTest", "runtime supportsFunctionCalling=${Llm.supportsTools(ctx)}") // 参考値。実際の判定は下のループ
         t = System.currentTimeMillis()
         var called: String? = null
-        val tools = listOf(LocalTool("lookupArea", "住所を指定して、その地点の洪水などの災害リスクを調べる", "address", "日本の住所") {
+        val tools = listOf(LocalTool("lookupArea", "住所を指定して、その地点の洪水などの災害リスクを調べる", "address", "日本の住所", "災害リスクを調べています") {
             called = it; "洪水浸水: 3〜5m（想定最大規模）\n土砂災害: 該当なし"
         })
+        val progress = ArrayList<String>()
         val ans = Llm.chat(ctx, "質問にはツールで調べて日本語で一文で答えてください。", tools = tools).use { c ->
-            runWithTools("東京都千代田区丸の内1丁目の洪水リスクを教えて", tools) { msg ->
+            runWithTools("東京都千代田区丸の内1丁目の洪水リスクを教えて", tools,
+                onTool = { t, arg -> progress += if (t == null) "done" else "${t.doing}|$arg" }) { msg ->
                 runBlocking { c.sendMessageAsync(msg).toList().joinToString("") { it.text } }.also { Log.i("LlmTest", "raw=[$it]") }
             }
         }
         Log.i("LlmTest", "tool called=$called ${System.currentTimeMillis() - t}ms ans=[${stripCalls(ans)}]")
+        Log.i("LlmTest", "progress=$progress")
+        assertTrue("進捗が出ていない: $progress", progress.any { it.startsWith("災害リスクを調べています|") })
+        assertEquals("done", progress.last()) // 出しっぱなしにならない
         assertTrue("tool not called (ans=$ans)", called != null)
         assertTrue("answer lacks tool result: $ans", "3〜5m" in stripCalls(ans))
     }

@@ -45,7 +45,7 @@ class ToolLoopTest {
 
     /** ツールを呼び、その結果を踏まえた答えが返るまで回る */
     @Test fun loopFeedsResultBack() {
-        val tools = listOf(LocalTool("lookupArea", "災害リスク", "address", "住所") { "洪水浸水: 3〜5m" })
+        val tools = listOf(LocalTool("lookupArea", "災害リスク", "address", "住所", "調べています") { "洪水浸水: 3〜5m" })
         val sent = ArrayList<String>()
         val ans = runWithTools("丸の内の洪水リスクは？", tools) { msg ->
             sent += msg
@@ -67,7 +67,7 @@ class ToolLoopTest {
 
     /** ツールが例外を投げてもループは続く */
     @Test fun toolErrorIsReportedToModel() {
-        val tools = listOf(LocalTool("boom", "落ちる", "address", "住所") { throw ApiError("APIキー未設定") })
+        val tools = listOf(LocalTool("boom", "落ちる", "address", "住所", "調べています") { throw ApiError("APIキー未設定") })
         val sent = ArrayList<String>()
         runWithTools("q", tools) { msg ->
             sent += msg
@@ -78,7 +78,7 @@ class ToolLoopTest {
 
     /** ツールを呼び続けても maxHops で止まる */
     @Test fun stopsAtMaxHops() {
-        val tools = listOf(LocalTool("lookupArea", "d", "address", "住所") { "r" })
+        val tools = listOf(LocalTool("lookupArea", "d", "address", "住所", "調べています") { "r" })
         var n = 0
         val ans = runWithTools("q", tools, maxHops = 2) {
             n++
@@ -90,8 +90,8 @@ class ToolLoopTest {
 
     @Test fun declareListsEveryTool() {
         val d = listOf(
-            LocalTool("lookupArea", "災害リスクを調べる", "address", "日本の住所") { "" },
-            LocalTool("landPrice", "地価を調べる", "address", "日本の住所") { "" },
+            LocalTool("lookupArea", "災害リスクを調べる", "address", "日本の住所", "調べています") { "" },
+            LocalTool("landPrice", "地価を調べる", "address", "日本の住所", "調べています") { "" },
         ).declare()
         assertTrue("lookupArea" in d && "landPrice" in d)
         assertTrue("呼び出しの書式が無い", "<|tool_call>call:" in d)
@@ -99,12 +99,35 @@ class ToolLoopTest {
 
     /** 宣言した書式のとおりに書かれた呼び出しを、実際に拾えること（宣言とパーサのずれ防止） */
     @Test fun declaredFormatIsParseable() {
-        val tools = listOf(LocalTool("lookupArea", "災害リスクを調べる", "address", "日本の住所") { "" })
+        val tools = listOf(LocalTool("lookupArea", "災害リスクを調べる", "address", "日本の住所", "調べています") { "" })
         val example = Regex("""<\|tool_call>call:.+?<tool_call\|>""").findAll(tools.declare()).last().value
         assertEquals(listOf("lookupArea" to "東京都千代田区丸の内1丁目"), findCalls(example))
     }
 
     @Test fun emptyToolsDeclareNothing() {
         assertEquals("", emptyList<LocalTool>().declare())
+    }
+
+    /** 実行の前後で進捗の文言が届く。終わりは null で知らせる */
+    @Test fun reportsToolProgress() {
+        val tools = listOf(LocalTool("lookupArea", "災害リスク", "address", "住所", "災害リスクを調べています") { "r" })
+        val seen = ArrayList<Pair<String?, String>>()
+        var n = 0
+        runWithTools("q", tools, onTool = { t, arg -> seen += t?.doing to arg }) {
+            n++
+            if (n == 1) "<|tool_call>call:lookupArea{address:${Q}丸の内${Q}}<tool_call|>" else "答え"
+        }
+        assertEquals(listOf("災害リスクを調べています" to "丸の内", null to ""), seen)
+    }
+
+    /** 知らないツールでも、終わりの合図は必ず来る（進捗が出しっぱなしにならない） */
+    @Test fun reportsProgressEndForUnknownTool() {
+        val seen = ArrayList<Pair<String?, String>>()
+        var n = 0
+        runWithTools("q", emptyList(), onTool = { t, arg -> seen += t?.doing to arg }) {
+            n++
+            if (n == 1) "<|tool_call>call:nope{address:${Q}x${Q}}<tool_call|>" else "答え"
+        }
+        assertEquals(listOf(null to "x", null to ""), seen)
     }
 }

@@ -46,6 +46,8 @@ fun String.stripMd(): String = replace(Regex("\\*\\*|__|`"), "")
 class ChatState(val scope: CoroutineScope) {
     val log = mutableStateListOf<Pair<Boolean, String>>() // (ユーザー発言か, 本文)
     var busy by mutableStateOf("")
+    /** 進捗の補足（ツールに渡した住所など）。busy が空なら意味を持たない */
+    var detail by mutableStateOf("")
     var error by mutableStateOf("")
     var conv: Conversation? = null
     /** 生成中に調査結果が増えた。生成が終わったら会話を作り直す */
@@ -99,13 +101,16 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
                         val cv = state.conv ?: makeConv(ctx).also { state.conv = it }
                         state.busy = "考え中…"
                         // ツールを呼ぶ間は生成が複数回に分かれる。吹き出しは毎回頭から書き直す
-                        runWithTools(q, tools) { msg ->
+                        runWithTools(q, tools, onTool = { t, arg ->
+                            // 実行中は何を調べているかを進捗に出す。終わったら通常の文言に戻す
+                            state.busy = if (t == null) "考え中…" else t.doing
+                            state.detail = if (t == null) "" else arg
+                        }) { msg ->
                             val raw = StringBuilder()
                             runBlocking {
                                 cv.sendMessageAsync(msg).collect { m -> // 差分が届く
                                     raw.append(m.text)
-                                    // ツール記法は画面に出さない。呼び出し中は「調べています…」を見せる
-                                    state.busy = if ("<|tool_call>" in raw) "調べています…" else "考え中…"
+                                    // ツール記法は画面に出さない。呼び出しを書いている間は考え中のまま
                                     log[log.lastIndex] = false to stripCalls(raw.toString())
                                 }
                             }
@@ -118,7 +123,7 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
                 state.error = "生成に失敗しました: ${e.message?.take(120) ?: e.javaClass.simpleName}"
                 if (log.lastOrNull()?.second.isNullOrEmpty()) log.removeAt(log.lastIndex)
             } finally {
-                state.busy = ""
+                state.busy = ""; state.detail = ""
                 if (state.stale) { state.stale = false; state.close() }
             }
         }
@@ -141,12 +146,17 @@ fun ChatPanel(state: ChatState, intro: String, quick: List<String>, makeConv: (C
                         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = if (me) 18.dp else 4.dp, bottomEnd = if (me) 4.dp else 18.dp),
                         colors = CardDefaults.cardColors(containerColor = if (me) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)
                     ) {
-                        Text(if (me) t else t.stripMd().ifEmpty { state.busy }, Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 300.dp), style = MaterialTheme.typography.bodyMedium)
+                        // 本文が出るまでの繋ぎ。詳しい状況は下の進捗に出すので、ここは短い文言のままにする
+                        Text(if (me) t else t.stripMd().ifEmpty { "…" }, Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 300.dp), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
         }
-        if (state.busy.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state.busy.isNotEmpty()) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(state.busy + if (state.detail.isEmpty()) "" else "\n（${state.detail}）",
+                Modifier.padding(horizontal = 12.dp, vertical = 2.dp), style = MaterialTheme.typography.bodySmall)
+        }
         if (state.error.isNotEmpty()) Text(state.error, Modifier.padding(horizontal = 12.dp), color = C_BAD, style = MaterialTheme.typography.bodySmall)
         if (log.isEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             quick.forEach { q -> AssistChip({ send(q) }, { Text(q) }, enabled = state.busy.isEmpty()) }

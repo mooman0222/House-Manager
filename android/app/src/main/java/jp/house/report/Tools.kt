@@ -24,7 +24,7 @@ fun reinfoTools(key: String, cacheDir: File): List<LocalTool> {
         LocalTool(
             "lookupArea",
             "住所を指定して、その地点の災害リスク（洪水・高潮・津波・土砂災害・液状化など）、建築条件（用途地域・防火地域・地区計画）、小中学校区を調べる。調査結果に無い住所について聞かれた時に使う",
-            "address", addr,
+            "address", addr, "災害リスクや建築条件を調べています",
         ) { address ->
             val L = lib(address)
             val feats = L.hereAll(POLY_LAYERS.map { it.api })
@@ -33,7 +33,7 @@ fun reinfoTools(key: String, cacheDir: File): List<LocalTool> {
         LocalTool(
             "landPrice",
             "住所を指定して、周辺1km以内の公示地価・都道府県地価調査の標準地（円/㎡）を近い順に最大5件調べる",
-            "address", addr,
+            "address", addr, "周辺の公示地価を調べています",
         ) { address ->
             val L = lib(address)
             val year = LocalDate.now().year
