@@ -72,6 +72,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var key by mutableStateOf(prefs.getString("key", "") ?: "")
     fun saveKey(k: String) { key = k; prefs.edit().putString("key", k).apply() }
     val reinfoKey get() = key.trim()
+    /** 保存する成約件数。旧値や範囲外は既定に戻す */
+    var dealLimit by mutableStateOf(prefs.getInt("dealLimit", DEFAULT_DEAL_LIMIT).takeIf { it in DEAL_OPTIONS } ?: DEFAULT_DEAL_LIMIT)
+    fun saveDealLimit(n: Int) { if (n !in DEAL_OPTIONS) return; dealLimit = n; prefs.edit().putInt("dealLimit", n).apply() }
 
     var tab by mutableStateOf(0)
     var saved by mutableStateOf(loadSaved())
@@ -127,7 +130,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
             try {
                 // runInterruptible: キャンセル時にスレッドを割り込み、httpJson の待機で抜ける
                 val c = runInterruptible(Dispatchers.IO) {
-                    analyze(inp, apiKey, tilesDir(ctx), fix, partial = { if (isActive) results[inp.key] = it }) { p -> if (isActive) status = p }
+                    analyze(inp, apiKey, tilesDir(ctx), fix, dealLimit = dealLimit, partial = { if (isActive) results[inp.key] = it }) { p -> if (isActive) status = p }
                 }
                 if (isActive) { results[inp.key] = c; ResultStore.save(ctx, c) }
             } catch (e: CancellationException) { throw e
@@ -342,6 +345,13 @@ fun SettingsScreen(app: AppState) {
         OutlinedTextField(app.key, { app.saveKey(it) }, Modifier.fillMaxWidth(), label = { Text("不動産情報ライブラリ APIキー") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
         Text("APIキーはこの端末の中にだけ保存されます。キーは国土交通省 不動産情報ライブラリ（reinfolib.mlit.go.jp）で個人でも無料で申請できます。", style = MaterialTheme.typography.bodySmall)
         OutlinedButton({ app.clearCache() }, enabled = app.status.isEmpty()) { Text(if (app.status.isEmpty()) "取得データのキャッシュを削除" else "調査中はキャッシュを削除できません") }
+        Text("保存する成約件数", style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            DEAL_OPTIONS.forEachIndexed { i, n ->
+                SegmentedButton(app.dealLimit == n, { app.saveDealLimit(n) }, SegmentedButtonDefaults.itemShape(i, DEAL_OPTIONS.size), enabled = app.status.isEmpty()) { Text("$n", style = MaterialTheme.typography.labelSmall) }
+            }
+        }
+        Text("同じ町丁目を優先し、あとは新しい順に残します。中央値などの統計は全件で計算します。", style = MaterialTheme.typography.labelSmall)
         HorizontalDivider()
         BackupSection(app)
         HorizontalDivider()

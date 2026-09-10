@@ -139,8 +139,19 @@ fun quartersBack(n: Int): Pair<String, String> {
 
 private fun median(v: List<Double>): Double { val s = v.sorted(); val n = s.size; return if (n % 2 == 1) s[n / 2] else (s[n / 2 - 1] + s[n / 2]) / 2 }
 
+/** 保存・表示する成約の上限。同じ町丁目を優先し、あとは新しい順。統計は全件で計算し、ここでは保存量だけ絞る */
+fun prioritizeDeals(deals: List<Deal>, limit: Int): List<Deal> {
+    if (deals.size <= limit) return deals
+    val (same, rest) = deals.partition { it.sameDistrict }
+    return (same + rest).take(limit.coerceAtLeast(1))
+}
+
+/** 保存する成約件数の選択肢と既定。件数が多い地域で端末負荷を抑える */
+val DEAL_OPTIONS = listOf(100, 200, 500)
+const val DEFAULT_DEAL_LIMIT = 100
+
 /** fix は住所が見つからない時に表記を補正する（端末内 LLM）。null なら補正しない。 */
-fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)? = null, partial: (Candidate) -> Unit = {}, progress: (String) -> Unit): Candidate {
+fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)? = null, dealLimit: Int = DEFAULT_DEAL_LIMIT, partial: (Candidate) -> Unit = {}, progress: (String) -> Unit): Candidate {
     progress("住所を検索中")
     val g = try { geocode(inp.address) } catch (e: ApiError) {
         val f = fix ?: throw e
@@ -271,7 +282,7 @@ fun analyze(inp: Input, key: String, cacheDir: File, fix: ((String) -> String?)?
         val range = inp.area?.let { a -> su[su.size / 4] * a / 1e4 to su[3 * su.size / 4] * a / 1e4 }
         val qs = deals.map { it.q }.distinct().sorted()
         val trend = Series(qs.map { "${it.take(4)}Q${it.drop(4)}" }, qs.map { q -> median(deals.filter { it.q == q }.map { it.unit }) / 1e4 })
-        prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, simNote, trend, allDeals)
+        prices = Prices(scope, units, if (inp.price != null && inp.area != null && inp.area > 0) inp.price * 1e4 / inp.area else null, med, median(su), range, similar.size, simNote, trend, prioritizeDeals(allDeals, dealLimit))
     }
 
     return Candidate(inp, g, sections, MapLayers(areas, pins), prices, pop)
