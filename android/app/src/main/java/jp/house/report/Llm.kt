@@ -27,8 +27,6 @@ data class LlmModel(val id: String, val name: String, val note: String, val url:
 /** 端末内 LLM（LiteRT-LM）。モデルは設定で選び、初回に filesDir へダウンロードする。 */
 object Llm {
     val MODELS = listOf(
-        LlmModel("qwen3-0.6b", "Qwen3 0.6B（最軽量）", "RAM 3GB 級でも動く。日本語の質は低めで、短い要約向き", "https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B.litertlm", 614_236_160L),
-        LlmModel("qwen3-1.7b", "Qwen3 1.7B（軽量）", "RAM 4GB 級向け。E2B より速く、文章の質はやや落ちる", "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm", 977_184_032L),
         LlmModel("gemma-4-E2B-it", "Gemma 4 E2B（標準）", "RAM 4GB 以上。日本語の質と速度のバランスが良い", "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm", 2_588_147_712L),
         LlmModel("gemma-4-E4B-it", "Gemma 4 E4B（高性能）", "RAM 8GB 以上推奨。最も賢いが遅く、メモリを多く使う", "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm", 3_659_530_240L),
     )
@@ -53,7 +51,15 @@ object Llm {
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
-    fun selectedId(ctx: Context) = prefs(ctx).getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
+    /** 廃止済みモデルが選ばれていたら既定に戻す */
+    fun selectedId(ctx: Context) = prefs(ctx).getString("model", DEFAULT_MODEL)?.takeIf { id -> MODELS.any { it.id == id } } ?: DEFAULT_MODEL
+    /** 一覧に無いモデルファイル（廃止済み・中断残骸）が残っていたら消す */
+    fun sweepUnknownModels(ctx: Context) {
+        ctx.filesDir.listFiles { f ->
+            val base = f.name.removeSuffix(".part").removeSuffix(".litertlm")
+            (f.name.endsWith(".litertlm") || f.name.endsWith(".litertlm.part")) && MODELS.none { it.id == base }
+        }?.forEach { it.delete() }
+    }
     fun model(ctx: Context) = MODELS.firstOrNull { it.id == selectedId(ctx) } ?: MODELS.first { it.id == DEFAULT_MODEL }
     /** 選択を保存。読み込み済みエンジンが別モデルなら次回利用時に作り直す */
     @Synchronized fun select(ctx: Context, id: String): Boolean {
