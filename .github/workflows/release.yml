@@ -32,3 +32,8 @@ jobs:
           tag="build-${{ github.run_number }}"
           gh release create "$tag" house-report.apk --title "おうちカルテ build ${{ github.run_number }}" \
             --notes "コミット ${{ github.sha }} から自動ビルド。インストール方法は README を参照。"
+      - name: 古い Release を整理（build-* の最新10件を保持）
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          tags=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^build-' | sort -t- -k2 -n | head -n -10)
+          for t in $tags; do gh release delete "$t" --yes --cleanup-tag; done
