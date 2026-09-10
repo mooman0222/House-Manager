@@ -68,6 +68,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val ctx: Context get() = getApplication()
     val scope: CoroutineScope get() = viewModelScope
     private val prefs = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
+    init { Llm.sweepUnknownModels(ctx) }
     var key by mutableStateOf(prefs.getString("key", "") ?: "")
     fun saveKey(k: String) { key = k; prefs.edit().putString("key", k).apply() }
     val reinfoKey get() = key.trim()
@@ -380,14 +381,21 @@ fun SettingsScreen(app: AppState) {
             }
         }
         if (app.dlError.isNotEmpty()) Text(app.dlError, color = C_BAD, style = MaterialTheme.typography.bodySmall)
-        Text(DISCLAIMER, style = MaterialTheme.typography.labelSmall)
-        Text(SOURCES, style = MaterialTheme.typography.labelSmall)
+        var legal by remember { mutableStateOf<Pair<String, String>?>(null) }
+        legal?.let { (title, body) ->
+            AlertDialog(onDismissRequest = { legal = null }, title = { Text(title) }, text = { Text(body) },
+                confirmButton = { TextButton({ legal = null }) { Text("閉じる") } })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton({ legal = "免責事項" to DISCLAIMER }, Modifier.weight(1f)) { Text("免責事項") }
+            OutlinedButton({ legal = "出典・利用規約" to SOURCES }, Modifier.weight(1f)) { Text("出典・利用規約") }
+        }
     }
 }
 
 const val DISCLAIMER = "このサービスは、国土交通省の不動産情報ライブラリのAPI機能を使用していますが、提供情報の最新性、正確性、完全性等が保証されたものではありません"
 
-/** 利用規約（PDL1.0・API利用規約第7条・第8条）に沿った出典・責任表示。設定画面に表示する */
+/** 利用規約（PDL1.0・API利用規約第7条・第8条）に沿った出典・責任表示。設定画面のボタンから表示する */
 const val SOURCES = "出典：国土交通省 不動産情報ライブラリ（https://www.reinfolib.mlit.go.jp/）の情報をもとに作成\n" +
         "原典：国土数値情報・都市計画決定GISデータ・液状化の発生傾向図等（国土交通省）、住所検索（国土地理院）\n" +
         "本アプリの集計・判定は上記データを編集・加工したもので、国が作成したものではありません。本アプリは個人開発のもので、国土交通省とは関係ありません。参考情報としてご利用ください（重要事項説明や建築確認等の手続に用いることはできません）"
