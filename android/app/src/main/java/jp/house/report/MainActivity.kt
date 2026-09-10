@@ -350,7 +350,7 @@ fun SettingsScreen(app: AppState) {
                 SegmentedButton(app.maxTokens == n, { if (!app.setMaxTokens(n)) app.dlError = "AIが使用中のため変更できません" }, SegmentedButtonDefaults.itemShape(i, Llm.TOKEN_OPTIONS.size), enabled = !app.aiInUse) { Text("$n", style = MaterialTheme.typography.labelSmall) }
             }
         }
-        Text("前置き（調査結果）＋会話履歴＋生成の合計。大きいほどメモリを使い、RAM 4GB 級の端末では 16384 以上でアプリが落ちることがあります。候補が多く前置きが長い場合だけ上げてください。", style = MaterialTheme.typography.labelSmall)
+        Text("前置き（調査結果）＋会話履歴＋生成の合計。8192 でも端末メモリを数GB使うため、候補が多いときだけ上げてください。", style = MaterialTheme.typography.labelSmall)
         app.modelsVersion // 導入状態が変わったら再描画
         Llm.MODELS.forEach { m ->
             val ready = m.ready(app.ctx); val selected = m.id == app.modelId; val dl = app.downloading == m.id

@@ -45,21 +45,22 @@ class TokenLimitTest {
         } finally { Llm.close(); Llm.setMaxTokens(ctx, orig) }
     }
 
-    /** 16384 で実際に生成させる。初期化は通るので、落ちるならここ */
+    /** 上限いっぱい（8192）で実際に生成させる。16384 は RAM 16GB でも lmkd に落とされたため選択肢から外した */
     @Test fun generatesAtHighLimit() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         assumeTrue("no model", Llm.ready(ctx))
         val orig = Llm.maxTokens(ctx)
+        val high = Llm.TOKEN_OPTIONS.max()
         try {
             Llm.close()
-            Llm.setMaxTokens(ctx, 16384)
-            Log.i("TokenLimit", "gen@16384 start ${mem(ctx)}")
+            Llm.setMaxTokens(ctx, high)
+            Log.i("TokenLimit", "gen@${high} start ${mem(ctx)}")
             Llm.engine(ctx)
-            Log.i("TokenLimit", "gen@16384 engine ready ${mem(ctx)}")
+            Log.i("TokenLimit", "gen@${high} engine ready ${mem(ctx)}")
             val out = Llm.chat(ctx, "一文で簡潔に答えてください。").use { c ->
                 kotlinx.coroutines.runBlocking { c.sendMessage("東京タワーの高さは？").text }
             }
-            Log.i("TokenLimit", "gen@16384 out=[${out.trim()}] ${mem(ctx)}")
+            Log.i("TokenLimit", "gen@${high} out=[${out.trim()}] ${mem(ctx)}")
         } finally { Llm.close(); Llm.setMaxTokens(ctx, orig) }
     }
 
@@ -68,9 +69,10 @@ class TokenLimitTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         assumeTrue("no model", Llm.ready(ctx))
         val orig = Llm.maxTokens(ctx)
+        val high = Llm.TOKEN_OPTIONS.max()
         try {
             Llm.close()
-            Llm.setMaxTokens(ctx, 16384)
+            Llm.setMaxTokens(ctx, high)
             Llm.engine(ctx)
             // 物件の要約を模した長文を積む（実運用で前置きが伸びる状況の再現）
             val sys = buildString { repeat(400) { appendLine("【物件${it + 1}】東京都千代田区丸の内1丁目 中古マンション 価格5000万円 面積70㎡ 築2010年 洪水浸水3〜5m 用途地域は商業地域") } }
@@ -81,6 +83,23 @@ class TokenLimitTest {
             }
             Log.i("TokenLimit", "longctx out=[${out.trim().take(60)}] ${mem(ctx)}")
         } finally { Llm.close(); Llm.setMaxTokens(ctx, orig) }
+    }
+
+    /** 旧設定（16384/32768）が残っていても 8192 に丸められ、保存も拒否される。モデル不要 */
+    @Test fun oldSavedValueIsClamped() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val orig = Llm.maxTokens(ctx)
+        try {
+            ctx.getSharedPreferences("app", android.content.Context.MODE_PRIVATE).edit().putInt("maxTokens", 16384).apply()
+            org.junit.Assert.assertEquals(Llm.DEFAULT_TOKENS, Llm.maxTokens(ctx))
+            org.junit.Assert.assertFalse(Llm.setMaxTokens(ctx, 16384))
+            org.junit.Assert.assertFalse(Llm.setMaxTokens(ctx, 32768))
+            org.junit.Assert.assertTrue(Llm.setMaxTokens(ctx, 8192))
+            org.junit.Assert.assertEquals(8192, Llm.maxTokens(ctx))
+        } finally {
+            Llm.close()
+            ctx.getSharedPreferences("app", android.content.Context.MODE_PRIVATE).edit().putInt("maxTokens", orig).apply()
+        }
     }
 
     /** 作り直し（close せずに別設定で作る経路）で2重に確保していないか */

@@ -33,12 +33,19 @@ object Llm {
         LlmModel("gemma-4-E4B-it", "Gemma 4 E4B（高性能）", "RAM 8GB 以上推奨。最も賢いが遅く、メモリを多く使う", "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm", 3_659_530_240L),
     )
     const val DEFAULT_MODEL = "gemma-4-E2B-it"
-    /** 会話1本の上限（前置き＋履歴＋生成）。大きいほど KV キャッシュのメモリを食い、RAM 4GB 級では 16384 でプロセスが落ちた */
-    val TOKEN_OPTIONS = listOf(4096, 8192, 16384, 32768)
+    /** 会話1本の上限（前置き＋履歴＋生成）。KV キャッシュは上限分を先に確保するため、
+     *  16384 は Gemma 4 E2B で約11.5GBまで膨らみ、RAM 16GB (Xperia 1 IV) でも lmkd に foreground kill された。
+     *  SIGKILL は捕捉不能なので上限自体を 8192 に絞る。旧設定の 16384/32768 は読み替えで 8192 に丸める */
+    val TOKEN_OPTIONS = listOf(4096, 8192)
     const val DEFAULT_TOKENS = 8192
-    fun maxTokens(ctx: Context) = prefs(ctx).getInt("maxTokens", DEFAULT_TOKENS)
-    /** 上限を保存。読み込み済みエンジンと違えば次回利用時に作り直す */
+    /** 保存値が旧選択肢（16384/32768）のままなら 8192 に丸める。選択肢外の値は既定に戻す */
+    fun maxTokens(ctx: Context): Int {
+        val saved = prefs(ctx).getInt("maxTokens", DEFAULT_TOKENS)
+        return if (saved in TOKEN_OPTIONS) saved else DEFAULT_TOKENS
+    }
+    /** 上限を保存。選択肢外は受け付けない。読み込み済みエンジンと違えば次回利用時に作り直す */
     @Synchronized fun setMaxTokens(ctx: Context, n: Int): Boolean {
+        if (n !in TOKEN_OPTIONS) return false
         if (busy) return false
         prefs(ctx).edit().putInt("maxTokens", n).apply()
         if (engineTokens != n) { engine?.close(); engine = null }
