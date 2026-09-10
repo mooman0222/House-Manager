@@ -113,7 +113,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     fun run(inp: Input) {
         if (results[inp.key]?.done == true || isQueued(inp) || runningKey == inp.key) return
-        if (key.isBlank()) { error = "設定画面で不動産情報ライブラリのAPIキーを入力してください"; tab = 3; return }
+        if (key.isBlank()) { error = "設定画面で不動産情報ライブラリのAPIキーを入力してください"; tab = 4; return }
         failures.remove(inp.key)
         if (running != null) { queue += inp; return }
         start(inp)
@@ -259,7 +259,7 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
 
     Scaffold(bottomBar = {
         NavigationBar {
-            listOf("地図" to Icons.Default.Place, "比べる" to Icons.Default.List, "AI" to Icons.Default.Face, "設定" to Icons.Default.Settings).forEachIndexed { i, (t, ic) ->
+            listOf("地図" to Icons.Default.Place, "比べる" to Icons.Default.List, "資金" to Icons.Default.ShoppingCart, "AI" to Icons.Default.Face, "設定" to Icons.Default.Settings).forEachIndexed { i, (t, ic) ->
                 NavigationBarItem(app.tab == i, { app.tab = i }, { Icon(ic, t) }, label = { Text(t) })
             }
         }
@@ -269,7 +269,8 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
             // 各タブを破棄せず表示だけ切り替え、地図の状態（位置・読込済み区域・ページ）を保つ
             TabKeep(app.tab == 0) { HomeScreen(app) }
             TabKeep(app.tab == 1) { CompareScreen(app) }
-            TabKeep(app.tab == 2) {
+            TabKeep(app.tab == 2) { MoneyScreen(app) }
+            TabKeep(app.tab == 3) {
                 // 会話の前置きとツール実行で同じ一式を使う（別々に組むと宣言と実体がずれる）
                 val chatTools = remember(app.reinfoKey) { reinfoTools(app.reinfoKey, tilesDir(ctx)) + addPropertyTool(app) }
                 ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。物件の追加も頼めます。回答は参考情報で、正確性は保証されません。",
@@ -277,7 +278,7 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
                     { c -> Llm.chat(c, assistantSystem(app.chatCandidates, app.saved.filter { app.results[it.key]?.done != true }, systemBudget(Llm.maxTokens(c))), tools = chatTools) },
                     Modifier.fillMaxSize(), chatTools)
             }
-            TabKeep(app.tab == 3) { SettingsScreen(app) }
+            TabKeep(app.tab == 4) { SettingsScreen(app) }
             // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
             if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("ページを取得し、住所・価格・面積・築年を読み取っています。終わるまでお待ちください。", style = MaterialTheme.typography.bodySmall) } },
