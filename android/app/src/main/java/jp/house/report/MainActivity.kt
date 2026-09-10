@@ -132,8 +132,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 results.remove(inp.key)
+                // 失敗した候補は保存しない。残すと再起動のたび自動調査が再走する
+                saved = saved.filter { it.key != inp.key }; storeSaved()
+                failures.remove(inp.key)
                 error = "調査に失敗しました（${e.message?.take(60) ?: e.javaClass.simpleName}）。住所・通信環境・APIキーをご確認ください。"
-                failures[inp.key] = error
             } finally {
                 running = null; status = ""
                 queue.removeFirstOrNull()?.let { start(it) }
