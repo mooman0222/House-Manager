@@ -133,6 +133,15 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
     /** 候補を追加して調査し、シートで開く */
     fun add(inp: Input) { if (saved.none { it.key == inp.key }) { saved = saved + inp; storeSaved() }; selected = inp.key; tab = 0; run(inp) }
+    /**
+     * AI アシスタントからの追加。add と同じだがタブを奪わない（会話の途中で地図に飛ばさない）。
+     * ツールは IO スレッドから呼ばれるので、状態の更新はメインに載せる。調査の完了は待たない。
+     */
+    fun addFromChat(inp: Input) = scope.launch(Dispatchers.Main) {
+        if (saved.none { it.key == inp.key }) { saved = saved + inp; storeSaved() }
+        selected = inp.key
+        run(inp)
+    }
     fun toggleSave(inp: Input) { saved = if (saved.any { it.key == inp.key }) saved.filter { it.key != inp.key } else saved + inp; storeSaved() }
     fun remove(inp: Input) {
         if (runningKey == inp.key) running?.second?.cancel() // finally で次の候補が始まる
@@ -247,10 +256,14 @@ fun App(sharedText: String?, onSharedHandled: () -> Unit) {
             // 各タブを破棄せず表示だけ切り替え、地図の状態（位置・読込済み区域・ページ）を保つ
             TabKeep(app.tab == 0) { HomeScreen(app) }
             TabKeep(app.tab == 1) { CompareScreen(app) }
-            TabKeep(app.tab == 2) { ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。回答は参考情報で、正確性は保証されません。",
-                listOf("調査した物件を比較して"),
-                { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = reinfoTools(app.reinfoKey, tilesDir(c))) },
-                Modifier.fillMaxSize(), reinfoTools(app.reinfoKey, tilesDir(ctx))) }
+            TabKeep(app.tab == 2) {
+                // 会話の前置きとツール実行で同じ一式を使う（別々に組むと宣言と実体がずれる）
+                val chatTools = remember(app.reinfoKey) { reinfoTools(app.reinfoKey, tilesDir(ctx)) + addPropertyTool(app) }
+                ChatPanel(app.chat, "調査済みの物件すべてを踏まえて、比較や質問に端末内のAIが答えます。物件の追加も頼めます。回答は参考情報で、正確性は保証されません。",
+                    listOf("調査した物件を比較して"),
+                    { c -> Llm.chat(c, assistantSystem(app.results.values.filter { it.done }, app.saved.filter { app.results[it.key]?.done != true }), tools = chatTools) },
+                    Modifier.fillMaxSize(), chatTools)
+            }
             TabKeep(app.tab == 3) { SettingsScreen(app) }
             // 取り込み中は背後の操作を受け付けないモーダルで進捗を示す
             if (app.importing) AlertDialog(onDismissRequest = {}, title = { Text("物件ページを取り込み中") },

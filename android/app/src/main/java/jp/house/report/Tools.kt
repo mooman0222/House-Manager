@@ -11,6 +11,24 @@ import java.time.LocalDate
  *
  * 呼び出しの検出は ToolLoop 側で自前に行う（LiteRT-LM の tools= はこのモデルでは機能しない。理由は ToolLoop.kt）。
  */
+/**
+ * 物件を候補に加えて調査を始めるツール。地図タブの追加（AppState.add）と同じ処理を呼ぶ。
+ * 調査は数分かかるので完了は待たない（待つと Llm.gate を握ったまま住所補正が同じ gate を取りに来て詰まる）。
+ * 種別・価格などは指定できないので、既定のまま入れて後からカードの鉛筆で直してもらう。
+ */
+fun addPropertyTool(app: AppState): LocalTool = LocalTool(
+    "addProperty",
+    "住所を指定して、その物件を候補リストに追加し、災害リスクや相場の調査を始める。物件を追加してほしい・調べてほしいと頼まれた時に使う",
+    "address", "日本の住所。例: 東京都千代田区丸の内1丁目",
+    "物件を追加しています",
+) { address ->
+    val inp = Input(address.trim(), Kind.MANSION, null, null, null)
+    val known = app.saved.any { it.key == inp.key }
+    app.addFromChat(inp)
+    if (known) "「$address」は既に候補にあります。調査済みならそのまま、まだなら調査を始めました"
+    else "「$address」を候補に追加し、調査を始めました。結果は地図タブのカードに出ます。数分かかるので、終わってから質問してください"
+}
+
 fun reinfoTools(key: String, cacheDir: File): List<LocalTool> {
     fun lib(address: String): Lib {
         Log.i("ReinfoTools", "call address=$address") // 実機でツールが呼ばれたか logcat で追えるように
