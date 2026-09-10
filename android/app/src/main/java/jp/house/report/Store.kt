@@ -22,6 +22,8 @@ object ResultStore {
     private val quarter get() = quartersBack(8).second
 
     fun save(ctx: Context, c: Candidate) { if (c.done) file(ctx, c.input.key).writeText(c.toJson().put("q", quarter).toString()) }
+    /** バックアップ取り込み用。呼び出し側で復元した結果をそのまま書く */
+    fun saveJson(ctx: Context, key: String, j: JSONObject) { file(ctx, key).writeText(j.put("q", quarter).toString()) }
     fun delete(ctx: Context, key: String) { file(ctx, key).delete(); wideFile(ctx, key).delete() }
     fun clear(ctx: Context) { dir(ctx).deleteRecursively() }
 

@@ -179,7 +179,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     /** キャッシュ削除。調査中は拒否 */
     fun clearCache(): Boolean { if (running != null) return false; tilesDir(ctx).deleteRecursively(); ResultStore.clear(ctx); results.clear(); return true }
     private fun loadSaved(): List<Input> { val f = File(ctx.filesDir, "candidates.json"); if (!f.exists()) return emptyList(); val a = JSONArray(f.readText()); return (0 until a.length()).map { Input.from(a.getJSONObject(it)) } }
-    private fun storeSaved() = File(ctx.filesDir, "candidates.json").writeText(JSONArray(saved.map { it.toJson() }).toString())
+    fun storeSaved() = File(ctx.filesDir, "candidates.json").writeText(JSONArray(saved.map { it.toJson() }).toString())
 
     // 確認リストのチェック状態（候補キー → チェック済みの文）
     private val checkFile = File(ctx.filesDir, "checks.json")
@@ -190,7 +190,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val cur = checks[candidateKey].orEmpty(); checks[candidateKey] = if (text in cur) cur - text else cur + text
         persistChecks()
     }
-    private fun persistChecks() = checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
+    fun persistChecks() = checkFile.writeText(JSONObject(checks.mapValues { JSONArray(it.value.toList()) }.toMap()).toString())
 
     // 自分で追加したチェック項目（候補キー → 文の列）。自動生成と合わせて表示する
     private val customFile = File(ctx.filesDir, "custom_checks.json")
@@ -206,7 +206,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (customChecks[candidateKey].isNullOrEmpty()) customChecks.remove(candidateKey)
         persistCustom()
     }
-    private fun persistCustom() = customFile.writeText(JSONObject(customChecks.mapValues { JSONArray(it.value) }.toMap()).toString())
+    fun persistCustom() = customFile.writeText(JSONObject(customChecks.mapValues { JSONArray(it.value) }.toMap()).toString())
 
     // 物件毎の自由メモ（候補キー → 本文）。入力のたびに保存する
     private val memoFile = File(ctx.filesDir, "memos.json")
@@ -217,7 +217,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (text.isBlank()) memos.remove(candidateKey) else memos[candidateKey] = text
         persistMemos()
     }
-    private fun persistMemos() = memoFile.writeText(JSONObject(memos.toMap()).toString())
+    fun persistMemos() = memoFile.writeText(JSONObject(memos.toMap()).toString())
 
     // 全体アシスタント。会話はタブを切り替えても続き、調査結果が増えたら（生成が終わってから）作り直す
     val chat = ChatState(scope)
@@ -340,6 +340,8 @@ fun SettingsScreen(app: AppState) {
         OutlinedTextField(app.key, { app.saveKey(it) }, Modifier.fillMaxWidth(), label = { Text("不動産情報ライブラリ APIキー") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
         Text("APIキーはこの端末の中にだけ保存されます。キーは国土交通省 不動産情報ライブラリ（reinfolib.mlit.go.jp）で個人でも無料で申請できます。", style = MaterialTheme.typography.bodySmall)
         OutlinedButton({ app.clearCache() }, enabled = app.status.isEmpty()) { Text(if (app.status.isEmpty()) "取得データのキャッシュを削除" else "調査中はキャッシュを削除できません") }
+        HorizontalDivider()
+        BackupSection(app)
         HorizontalDivider()
         Text("物件ページの取り込み", style = MaterialTheme.typography.titleMedium)
         Text("ブラウザやポータルアプリの共有メニューから「おうちカルテ」を選ぶと、住所・価格・面積・築年を読み取って候補に追加できます。", style = MaterialTheme.typography.bodySmall)
